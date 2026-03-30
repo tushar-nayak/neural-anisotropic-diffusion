@@ -89,14 +89,18 @@ dataset = MRIDenoisingDataset(folder_path=dataset_path)
 dataloader = DataLoader(dataset, batch_size=8, shuffle=True)
 print(f"Successfully loaded {len(dataset)} images.")
 
-model = NeuralPeronaMalik(iterations=5, lambda_param=0.1).to(device)
+# TWEAK 1: Lowered lambda_param from 0.1 to 0.05 for tighter control
+model = NeuralPeronaMalik(iterations=5, lambda_param=0.05).to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-criterion = nn.MSELoss()
+
+# TWEAK 2: Swapped MSE for L1 Loss to punish blurriness 
+criterion = nn.L1Loss()
 
 # ==========================================
 # 4. TRAINING LOOP
 # ==========================================
-epochs = 50
+# TWEAK 3: Increased epochs to 200 so it can fully map the edges
+epochs = 200
 print("Starting training...")
 
 for epoch in range(epochs):
@@ -115,13 +119,15 @@ for epoch in range(epochs):
         epoch_loss += loss.item()
         
     avg_loss = epoch_loss / len(dataloader)
-    if (epoch + 1) % 5 == 0:
+    
+    # Updated to print every 10 epochs instead of 5 to keep the terminal clean
+    if (epoch + 1) % 10 == 0:
         print(f"Epoch [{epoch+1}/{epochs}] - Loss: {avg_loss:.4f}")
 
 print("Training Complete!")
 
 # ==========================================
-# 5. VISUALIZE RESULTS
+# 5. VISUALIZE RESULTS & SAVE
 # ==========================================
 print("Generating visual results...")
 model.eval()
@@ -147,8 +153,12 @@ axes[1].set_title("Input (Synthetic Noise)")
 axes[1].axis('off')
 
 axes[2].imshow(denoised_display, cmap='gray')
-axes[2].set_title("Neural PDE Output")
+axes[2].set_title("Neural PDE Output (Sharpened)")
 axes[2].axis('off')
 
 plt.tight_layout()
 plt.show()
+
+# Save the updated weights!
+torch.save(model.state_dict(), 'neural_pde_weights_L1.pth')
+print("Model weights saved successfully!")
