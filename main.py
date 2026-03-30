@@ -49,8 +49,9 @@ class NeuralPeronaMalik(nn.Module):
 # ==========================================
 class MRIDenoisingDataset(Dataset):
     def __init__(self, folder_path, image_size=128):
-        self.image_paths = glob.glob(os.path.join(folder_path, '*.jpg'), recursive=True) + \
-                           glob.glob(os.path.join(folder_path, '*.jpeg'), recursive=True)
+        # The '**' tells Python to dig into the 'yes' and 'no' subfolders!
+        self.image_paths = glob.glob(os.path.join(folder_path, '**', '*.jpg'), recursive=True) + \
+                           glob.glob(os.path.join(folder_path, '**', '*.jpeg'), recursive=True)
         
         self.transform = transforms.Compose([
             transforms.Grayscale(num_output_channels=1),
