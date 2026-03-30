@@ -13,21 +13,37 @@ from pytorch_msssim import ssim
 # 1. THE MODEL ARCHITECTURE
 # ==========================================
 class NeuralPeronaMalik(nn.Module):
-    def __init__(self, iterations=10, lambda_param=0.1):
+    def __init__(self, iterations=10, lambda_param=0.1, guidance_channels=8):
         super().__init__()
         self.iterations = iterations
         self.lambda_param = lambda_param
         
-        self.conduction_net = nn.Sequential(
-            nn.Conv2d(4, 16, kernel_size=3, padding=1),
+        # --- 1. THE GUIDANCE BRANCH ---
+        # This branch runs ONCE to create a "semantic map" of the image.
+        self.guidance_encoder = nn.Sequential(
+            nn.Conv2d(1, 16, kernel_size=3, padding=1),
             nn.ReLU(inplace=True),
-            nn.Conv2d(16, 16, kernel_size=3, padding=1),
+            nn.Conv2d(16, guidance_channels, kernel_size=3, padding=1),
+            nn.Sigmoid() # Keeps features normalized
+        )
+        
+        # --- 2. THE ENHANCED CONDUCTION NET ---
+        # Input: 4 gradients + 'guidance_channels' (total = 12 channels)
+        self.conduction_net = nn.Sequential(
+            nn.Conv2d(4 + guidance_channels, 32, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(32, 16, kernel_size=3, padding=1),
             nn.ReLU(inplace=True),
             nn.Conv2d(16, 4, kernel_size=3, padding=1),
             nn.Sigmoid() 
         )
 
     def forward(self, x):
+        # STEP A: Generate the Guidance Map ONCE
+        # This map tells the loop: "This area looks like a tumor margin"
+        guidance_features = self.guidance_encoder(x)
+        
+        # STEP B: The Unrolled Diffusion Loop
         for t in range(self.iterations):
             x_pad = F.pad(x, (1, 1, 1, 1), mode='replicate')
             
@@ -36,9 +52,12 @@ class NeuralPeronaMalik(nn.Module):
             grad_E = x_pad[:, :, 1:-1, 2:] - x
             grad_W = x_pad[:, :, 1:-1, :-2] - x
             
-            grads = torch.cat([grad_N, grad_S, grad_E, grad_W], dim=1)
+            # Combine LOCAL gradients with GLOBAL guidance features
+            # Shape: (B, 12, H, W)
+            combined_input = torch.cat([grad_N, grad_S, grad_E, grad_W, guidance_features], dim=1)
             
-            c = self.conduction_net(grads)
+            # Predict weights based on both math and semantic features
+            c = self.conduction_net(combined_input)
             c_N, c_S, c_E, c_W = torch.split(c, 1, dim=1)
             
             x = x + self.lambda_param * (c_N * grad_N + c_S * grad_S + c_E * grad_E + c_W * grad_W)
