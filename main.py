@@ -49,8 +49,8 @@ class NeuralPeronaMalik(nn.Module):
 # ==========================================
 class MRIDenoisingDataset(Dataset):
     def __init__(self, folder_path, image_size=128):
-        self.image_paths = glob.glob(os.path.join(folder_path, '*.jpg')) + \
-                           glob.glob(os.path.join(folder_path, '*.jpeg'))
+        self.image_paths = glob.glob(os.path.join(folder_path, '*.jpg'), recursive=True) + \
+                           glob.glob(os.path.join(folder_path, '*.jpeg'), recursive=True)
         
         self.transform = transforms.Compose([
             transforms.Grayscale(num_output_channels=1),
@@ -83,15 +83,15 @@ else:
 
 print(f"Running on device: {device}")
 
-dataset_path = 'brain_tumor_dataset/no' 
+dataset_path = '/Users/tushar/Documents/Repositories/neural-anisotropic-diffusion/brain_tumor_dataset' 
 
 dataset = MRIDenoisingDataset(folder_path=dataset_path)
 dataloader = DataLoader(dataset, batch_size=8, shuffle=True)
 print(f"Successfully loaded {len(dataset)} images.")
 
 # TWEAK 1: Lowered lambda_param from 0.1 to 0.05 for tighter control
-model = NeuralPeronaMalik(iterations=5, lambda_param=0.05).to(device)
-optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+model = NeuralPeronaMalik(iterations=10, lambda_param=0.1).to(device)
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
 # TWEAK 2: Swapped MSE for L1 Loss to punish blurriness 
 criterion = nn.L1Loss()
@@ -100,7 +100,7 @@ criterion = nn.L1Loss()
 # 4. TRAINING LOOP
 # ==========================================
 # TWEAK 3: Increased epochs to 200 so it can fully map the edges
-epochs = 200
+epochs = 300
 print("Starting training...")
 
 for epoch in range(epochs):
