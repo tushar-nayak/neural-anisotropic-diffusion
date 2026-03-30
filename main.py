@@ -1,5 +1,6 @@
 import os
 import glob
+import warnings
 import numpy as np
 import torch
 import torch.nn as nn
@@ -11,6 +12,9 @@ from PIL import Image
 import matplotlib.pyplot as plt
 from pytorch_msssim import ssim
 
+# Suppress harmless torchvision.io libjpeg warning (PIL is used instead)
+warnings.filterwarnings("ignore", category=UserWarning, module="torchvision")
+
 
 # ==========================================
 # 1. THE ARCHITECTURE
@@ -18,14 +22,10 @@ from pytorch_msssim import ssim
 class NeuralPeronaMalik(nn.Module):
     def __init__(self, iterations=10, lambda_param=0.1, guidance_channels=8):
         super().__init__()
-        # FIX: Assert stability bound for forward Euler diffusion
         assert lambda_param <= 0.25, "lambda_param > 0.25 violates 4-neighbor diffusion stability"
         self.iterations = iterations
         self.lambda_param = lambda_param
 
-        # FIX: Removed BatchNorm before Sigmoid (compresses output to ~0.5, kills dynamic range)
-        # FIX: Removed inplace=True from all ReLUs (autograd risk in iterative loop)
-        # FIX: Added dilated conv for wider receptive field (~9x9) in guidance encoder
         self.guidance_encoder = nn.Sequential(
             nn.Conv2d(1, 16, kernel_size=3, padding=2, dilation=2),
             nn.BatchNorm2d(16),
@@ -34,7 +34,6 @@ class NeuralPeronaMalik(nn.Module):
             nn.Sigmoid()
         )
 
-        # FIX: Channels parameterized via comment (not hardcoded)
         # Input: 4 directional gradients + guidance_channels = (4 + guidance_channels) total
         self.conduction_net = nn.Sequential(
             nn.Conv2d(4 + guidance_channels, 32, kernel_size=3, padding=1),
@@ -46,13 +45,8 @@ class NeuralPeronaMalik(nn.Module):
         )
 
     def forward(self, x):
-        # FIX: Pre-smooth noisy input before guidance extraction
-        # Prevents structural prior from being dominated by noise artifacts
         x_smooth = F.avg_pool2d(x, kernel_size=3, stride=1, padding=1)
-
-        # FIX: .detach() prevents guidance encoder from receiving
-        # ~iterations× amplified gradients vs conduction_net
-        guidance_features = self.guidance_encoder(x_smooth).detach()
+        guidance_features = self.guidance_encoder(x_smooth)
 
         for _ in range(self.iterations):
             x_pad = F.pad(x, (1, 1, 1, 1), mode='replicate')
@@ -75,7 +69,6 @@ class NeuralPeronaMalik(nn.Module):
 # 2. LOSSES
 # ==========================================
 def gradient_loss(pred, target):
-    """Edge-preserving loss: penalizes blurring of structural boundaries."""
     dx_pred = pred[:, :, :, 1:] - pred[:, :, :, :-1]
     dx_tgt  = target[:, :, :, 1:] - target[:, :, :, :-1]
     dy_pred = pred[:, :, 1:, :] - pred[:, :, :-1, :]
@@ -90,10 +83,9 @@ def psnr(pred, target):
 
 def combined_loss(output, clean, l1_criterion):
     ssim_loss = 1 - ssim(output, clean, data_range=1.0)
-    l1 = l1_criterion(output, clean)
-    grad = gradient_loss(output, clean)
-    # FIX: Added gradient loss term to prevent over-smoothing
-    return ssim_loss + 1.0 * l1 + 0.1 * grad
+    l1        = l1_criterion(output, clean)
+    grad      = gradient_loss(output, clean)
+    return ssim_loss + 1.0 * l1 + 0.25 * grad
 
 
 # ==========================================
@@ -110,7 +102,6 @@ class MRIDenoisingDataset(Dataset):
             self.image_paths.extend(paths)
             self.labels.extend([label] * len(paths))
 
-        # FIX: Open as 'L' directly; removed redundant convert('RGB') + Grayscale transform
         self.transform = transforms.Compose([
             transforms.Resize((image_size, image_size)),
             transforms.ToTensor()
@@ -120,21 +111,16 @@ class MRIDenoisingDataset(Dataset):
         return len(self.image_paths)
 
     def __getitem__(self, idx):
-        # FIX: Direct grayscale load instead of RGB -> Grayscale conversion
         clean_tensor = self.transform(Image.open(self.image_paths[idx]).convert('L'))
-
-        # FIX: Randomized noise sigma per sample for robustness
-        sigma = torch.empty(1).uniform_(0.05, 0.25).item()
+        sigma = torch.empty(1).uniform_(0.10, 0.20).item()
         noise = torch.randn_like(clean_tensor) * sigma
         noisy_tensor = torch.clamp(clean_tensor + noise, 0., 1.)
-
         return noisy_tensor, clean_tensor, self.labels[idx]
 
 
 # ==========================================
 # 4. SETUP
 # ==========================================
-# FIX: Full device fallback chain (MPS → CUDA → CPU)
 if torch.backends.mps.is_available():
     device = torch.device("mps")
 elif torch.cuda.is_available():
@@ -146,31 +132,43 @@ print(f"Running on: {device}")
 dataset_path = '/Users/tushar/Documents/Repositories/neural-anisotropic-diffusion/brain_tumor_dataset'
 full_dataset = MRIDenoisingDataset(dataset_path)
 
-# FIX: Stratified split to preserve class balance across train/val/test
 indices = list(range(len(full_dataset)))
 labels  = full_dataset.labels
 
-train_idx, temp_idx = train_test_split(indices, test_size=0.30, stratify=labels, random_state=42)
+train_idx, temp_idx = train_test_split(
+    indices, test_size=0.30, stratify=labels, random_state=42
+)
 temp_labels = [labels[i] for i in temp_idx]
-val_idx, test_idx = train_test_split(temp_idx, test_size=0.50, stratify=temp_labels, random_state=42)
+val_idx, test_idx = train_test_split(
+    temp_idx, test_size=0.50, stratify=temp_labels, random_state=42
+)
 
 train_set = Subset(full_dataset, train_idx)
 val_set   = Subset(full_dataset, val_idx)
 test_set  = Subset(full_dataset, test_idx)
-
 print(f"Train: {len(train_set)} | Val: {len(val_set)} | Test: {len(test_set)}")
 
+# FIX: num_workers=0 — macOS 'spawn' multiprocessing causes worker crash with num_workers > 0.
+# pin_memory removed — only benefits CUDA, has no effect on MPS.
 train_loader = DataLoader(train_set, batch_size=8, shuffle=True)
 val_loader   = DataLoader(val_set,   batch_size=8, shuffle=False)
 test_loader  = DataLoader(test_set,  batch_size=1, shuffle=False)
 
-model       = NeuralPeronaMalik(iterations=10, lambda_param=0.1).to(device)
-optimizer   = torch.optim.Adam(model.parameters(), lr=1e-3)
-l1_criterion = nn.L1Loss()
-epochs      = 150
+model = NeuralPeronaMalik(iterations=10, lambda_param=0.1).to(device)
 
-# FIX: Cosine annealing scheduler to avoid plateau from fixed LR
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-5)
+optimizer = torch.optim.Adam([
+    {'params': model.guidance_encoder.parameters(), 'lr': 1e-4},
+    {'params': model.conduction_net.parameters(),   'lr': 1e-3}
+])
+
+l1_criterion = nn.L1Loss()
+epochs = 150
+
+scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+    optimizer, T_0=50, T_mult=2, eta_min=1e-5
+)
+
+os.makedirs('checkpoints', exist_ok=True)
 
 
 # ==========================================
@@ -179,26 +177,20 @@ scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, 
 train_losses, val_losses = [], []
 train_psnrs,  val_psnrs  = [], []
 best_val_loss = float('inf')
-os.makedirs('checkpoints', exist_ok=True)
 
 for epoch in range(epochs):
-    # --- Train ---
     model.train()
     epoch_train_loss, epoch_train_psnr = 0.0, 0.0
     for noisy, clean, _ in train_loader:
         noisy, clean = noisy.to(device), clean.to(device)
-
-        # FIX: zero_grad at top of loop (before forward pass)
         optimizer.zero_grad()
         output = model(noisy)
         loss = combined_loss(output, clean, l1_criterion)
         loss.backward()
         optimizer.step()
-
         epoch_train_loss += loss.item()
         epoch_train_psnr += psnr(output.detach(), clean).item()
 
-    # --- Validate ---
     model.eval()
     epoch_val_loss, epoch_val_psnr = 0.0, 0.0
     with torch.no_grad():
@@ -210,24 +202,24 @@ for epoch in range(epochs):
 
     scheduler.step()
 
-    avg_train = epoch_train_loss / len(train_loader)
-    avg_val   = epoch_val_loss   / len(val_loader)
+    avg_train      = epoch_train_loss / len(train_loader)
+    avg_val        = epoch_val_loss   / len(val_loader)
     avg_train_psnr = epoch_train_psnr / len(train_loader)
     avg_val_psnr   = epoch_val_psnr   / len(val_loader)
 
-    train_losses.append(avg_train);      val_losses.append(avg_val)
-    train_psnrs.append(avg_train_psnr);  val_psnrs.append(avg_val_psnr)
+    train_losses.append(avg_train);     val_losses.append(avg_val)
+    train_psnrs.append(avg_train_psnr); val_psnrs.append(avg_val_psnr)
 
-    # FIX: Save best model by validation loss
     if avg_val < best_val_loss:
         best_val_loss = avg_val
         torch.save(model.state_dict(), 'checkpoints/best_model.pth')
 
     if (epoch + 1) % 10 == 0:
+        lrs = [pg['lr'] for pg in optimizer.param_groups]
         print(f"Epoch [{epoch+1}/{epochs}] "
-              f"Train Loss: {avg_train:.4f} | Val Loss: {avg_val:.4f} | "
-              f"Train PSNR: {avg_train_psnr:.2f}dB | Val PSNR: {avg_val_psnr:.2f}dB | "
-              f"LR: {scheduler.get_last_lr()[0]:.6f}")
+              f"Train: {avg_train:.4f} | Val: {avg_val:.4f} | "
+              f"PSNR Train: {avg_train_psnr:.2f}dB | Val: {avg_val_psnr:.2f}dB | "
+              f"LR: guide={lrs[0]:.2e} cond={lrs[1]:.2e}")
 
 print(f"\nTraining complete. Best val loss: {best_val_loss:.4f}")
 
@@ -235,18 +227,17 @@ print(f"\nTraining complete. Best val loss: {best_val_loss:.4f}")
 # ==========================================
 # 6. VISUALIZATION
 # ==========================================
-# A. Loss + PSNR curves
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
-
 ax1.plot(train_losses, label='Train'); ax1.plot(val_losses, label='Val')
-ax1.set_title("Loss (SSIM + L1 + Gradient)"); ax1.legend(); ax1.grid(True)
-
+ax1.set_title("Loss (SSIM + L1 + Gradient)")
+ax1.set_xlabel("Epoch"); ax1.legend(); ax1.grid(True)
 ax2.plot(train_psnrs, label='Train'); ax2.plot(val_psnrs, label='Val')
-ax2.set_title("PSNR (dB)"); ax2.set_ylabel("dB"); ax2.legend(); ax2.grid(True)
+ax2.set_title("PSNR (dB)")
+ax2.set_xlabel("Epoch"); ax2.set_ylabel("dB"); ax2.legend(); ax2.grid(True)
+plt.tight_layout()
+plt.savefig('loss_curves.png', dpi=150)
+plt.show()
 
-plt.tight_layout(); plt.savefig('loss_curves.png', dpi=150); plt.show()
-
-# B. Class-stratified qualitative results (load best model first)
 model.load_state_dict(torch.load('checkpoints/best_model.pth', map_location=device))
 model.eval()
 
@@ -276,4 +267,6 @@ for label, data_list in examples.items():
         axes[row, 2].axis('off')
         row += 1
 
-plt.tight_layout(); plt.savefig('qualitative_results.png', dpi=150); plt.show()
+plt.tight_layout()
+plt.savefig('qualitative_results.png', dpi=150)
+plt.show()
