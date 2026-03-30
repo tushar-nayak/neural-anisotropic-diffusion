@@ -1,5 +1,6 @@
 import os
 import glob
+import math
 import numpy as np
 import torch
 import torch.nn as nn
@@ -11,7 +12,7 @@ import matplotlib.pyplot as plt
 from pytorch_msssim import ssim
 
 # ==========================================
-# 1. THE ARCHITECTURE (Guidance + BatchNorm)
+# 1. THE MODEL ARCHITECTURE
 # ==========================================
 class NeuralPeronaMalik(nn.Module):
     def __init__(self, iterations=10, lambda_param=0.1, guidance_channels=8):
@@ -19,7 +20,6 @@ class NeuralPeronaMalik(nn.Module):
         self.iterations = iterations
         self.lambda_param = lambda_param
         
-        # Guidance Encoder with BatchNorm for stability
         self.guidance_encoder = nn.Sequential(
             nn.Conv2d(1, 16, kernel_size=3, padding=1),
             nn.BatchNorm2d(16),
@@ -55,17 +55,14 @@ class NeuralPeronaMalik(nn.Module):
         return x
 
 # ==========================================
-# 2. DATASET (Train/Val/Test Logic)
+# 2. DATASET & UTILS
 # ==========================================
 class MRIDenoisingDataset(Dataset):
     def __init__(self, folder_path, image_size=128):
-        # Find images and assign labels (0 for 'no', 1 for 'yes')
-        self.image_paths = []
-        self.labels = []
-        
+        self.image_paths, self.labels = [], []
         for label, subfolder in enumerate(['no', 'yes']):
-            paths = glob.glob(os.path.join(folder_path, subfolder, '*.jpg')) + \
-                    glob.glob(os.path.join(folder_path, subfolder, '*.jpeg'))
+            paths = glob.glob(os.path.join(folder_path, subfolder, '**', '*.jpg'), recursive=True) + \
+                    glob.glob(os.path.join(folder_path, subfolder, '**', '*.jpeg'), recursive=True)
             self.image_paths.extend(paths)
             self.labels.extend([label] * len(paths))
 
@@ -75,17 +72,21 @@ class MRIDenoisingDataset(Dataset):
             transforms.ToTensor()
         ])
 
-    def __len__(self):
-        return len(self.image_paths)
-
+    def __len__(self): return len(self.image_paths)
     def __getitem__(self, idx):
-        clean_tensor = self.transform(Image.open(self.image_paths[idx]).convert('RGB'))
-        noise = torch.randn_like(clean_tensor) * 0.15 
-        noisy_tensor = torch.clamp(clean_tensor + noise, 0., 1.)
-        return noisy_tensor, clean_tensor, self.labels[idx]
+        clean = self.transform(Image.open(self.image_paths[idx]).convert('RGB'))
+        noise = torch.randn_like(clean) * 0.15 
+        noisy = torch.clamp(clean + noise, 0., 1.)
+        return noisy, clean, self.labels[idx]
+
+def get_metrics(img1, img2):
+    mse = F.mse_loss(img1, img2).item()
+    psnr = 100 if mse == 0 else 20 * math.log10(1.0 / math.sqrt(mse))
+    s_score = ssim(img1, img2, data_range=1.0).item()
+    return psnr, s_score
 
 # ==========================================
-# 3. TRAINING SETUP
+# 3. SETUP
 # ==========================================
 device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 dataset_path = '/Users/tushar/Documents/Repositories/neural-anisotropic-diffusion/brain_tumor_dataset'
@@ -94,7 +95,6 @@ full_dataset = MRIDenoisingDataset(dataset_path)
 train_size = int(0.7 * len(full_dataset))
 val_size = int(0.15 * len(full_dataset))
 test_size = len(full_dataset) - train_size - val_size
-
 train_set, val_set, test_set = random_split(full_dataset, [train_size, val_size, test_size])
 
 train_loader = DataLoader(train_set, batch_size=8, shuffle=True)
@@ -106,69 +106,80 @@ optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 l1_criterion = nn.L1Loss()
 
 # ==========================================
-# 4. TRAINING LOOP WITH METRICS
+# 4. TRAINING
 # ==========================================
 train_losses, val_losses = [], []
 epochs = 200
 
+print(f"Starting training on {device}...")
 for epoch in range(epochs):
     model.train()
-    epoch_train_loss = 0
+    batch_l = []
     for noisy, clean, _ in train_loader:
         noisy, clean = noisy.to(device), clean.to(device)
         output = model(noisy)
         loss = (1 - ssim(output, clean, data_range=1.0)) + 1.0 * l1_criterion(output, clean)
-        
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        epoch_train_loss += loss.item()
+        optimizer.zero_grad(); loss.backward(); optimizer.step()
+        batch_l.append(loss.item())
     
     model.eval()
-    epoch_val_loss = 0
+    v_batch_l = []
     with torch.no_grad():
         for noisy, clean, _ in val_loader:
             noisy, clean = noisy.to(device), clean.to(device)
-            output = model(noisy)
-            loss = (1 - ssim(output, clean, data_range=1.0)) + 1.0 * l1_criterion(output, clean)
-            epoch_val_loss += loss.item()
+            out = model(noisy)
+            v_loss = (1 - ssim(out, clean, data_range=1.0)) + 1.0 * l1_criterion(out, clean)
+            v_batch_l.append(v_loss.item())
 
-    train_losses.append(epoch_train_loss/len(train_loader))
-    val_losses.append(epoch_val_loss/len(val_loader))
-    
-    if (epoch+1) % 10 == 0:
+    train_losses.append(np.mean(batch_l))
+    val_losses.append(np.mean(v_batch_l))
+    if (epoch + 1) % 10 == 0:
         print(f"Epoch {epoch+1}: Train={train_losses[-1]:.4f}, Val={val_losses[-1]:.4f}")
 
-# ==========================================
-# 5. ANALYSIS & VISUALIZATION
-# ==========================================
-# A. Loss Plot
-plt.figure(figsize=(8, 5))
+# Save Loss Curve
+plt.figure(figsize=(10, 5))
 plt.plot(train_losses, label='Train Loss')
 plt.plot(val_losses, label='Val Loss')
-plt.title("Training vs Validation Loss (L1 + SSIM)")
-plt.legend()
-plt.show()
+plt.title("Training Dynamics (SSIM + L1)")
+plt.legend(); plt.grid(True)
+plt.savefig('training_loss_plot.png')
+print("Loss plot saved as 'training_loss_plot.png'")
 
-# B. Class-Specific Visualization
+# ==========================================
+# 5. FINAL VISUALIZATION & EVALUATION
+# ==========================================
 model.eval()
-examples = {0: [], 1: []} # 0: No Tumor, 1: Tumor
+examples = {0: [], 1: []}
 with torch.no_grad():
     for noisy, clean, label in test_set:
-        label_val = label
-        if len(examples[label_val]) < 2:
-            out = model(noisy.unsqueeze(0).to(device))
-            examples[label_val].append((clean, noisy, out.cpu()))
-        if len(examples[0]) == 2 and len(examples[1]) == 2: break
+        if len(examples[label]) < 2:
+            noisy_in = noisy.unsqueeze(0).to(device)
+            out = model(noisy_in).cpu()
+            psnr, s_val = get_metrics(out, clean.unsqueeze(0))
+            examples[label].append((clean, noisy, out, psnr, s_val))
+        if all(len(v) == 2 for v in examples.values()): break
 
-fig, axes = plt.subplots(4, 3, figsize=(12, 16))
+fig, axes = plt.subplots(4, 3, figsize=(15, 20))
 row = 0
-for label, data_list in examples.items():
-    class_name = "Healthy (No)" if label == 0 else "Tumor (Yes)"
-    for clean, noisy, out in data_list:
-        axes[row, 0].imshow(clean.squeeze(), cmap='gray'); axes[row, 0].set_title(f"{class_name} - Clean")
-        axes[row, 1].imshow(noisy.squeeze(), cmap='gray'); axes[row, 1].set_title("Input (Noise)")
-        axes[row, 2].imshow(out.squeeze(), cmap='gray'); axes[row, 2].set_title("Neural PDE Output")
+for label, data in examples.items():
+    name = "Healthy (No)" if label == 0 else "Tumor (Yes)"
+    for clean, noisy, out, psnr, s_val in data:
+        axes[row, 0].imshow(clean.squeeze(), cmap='gray')
+        axes[row, 0].set_title(f"{name} Ground Truth")
+        
+        axes[row, 1].imshow(noisy.squeeze(), cmap='gray')
+        axes[row, 1].set_title("Input (Synthetic Noise)")
+        
+        axes[row, 2].imshow(out.squeeze(), cmap='gray')
+        axes[row, 2].set_title(f"Neural PDE Output\nSSIM: {s_val:.4f} | PSNR: {psnr:.2f}dB")
+        
+        for ax in axes[row]: ax.axis('off')
         row += 1
+
 plt.tight_layout()
+plt.savefig('final_denoising_results.png')
+print("Final visualization saved as 'final_denoising_results.png'")
 plt.show()
+
+torch.save(model.state_dict(), 'neural_pde_final_weights.pth')
+print("Weights saved. Project Complete.")
