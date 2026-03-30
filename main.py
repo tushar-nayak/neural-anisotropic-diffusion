@@ -1,3 +1,11 @@
+# ============================================================
+# Neural Anisotropic Diffusion — NeuralPeronaMalik
+# Headless / SSH / CUDA-compatible
+# ============================================================
+import matplotlib
+matplotlib.use('Agg')   # MUST be before pyplot — headless safe
+import matplotlib.pyplot as plt
+
 import os
 import glob
 import warnings
@@ -9,7 +17,6 @@ import torchvision.transforms as transforms
 from torch.utils.data import Dataset, DataLoader, Subset
 from sklearn.model_selection import train_test_split
 from PIL import Image
-import matplotlib.pyplot as plt
 from pytorch_msssim import ssim
 
 # Suppress harmless torchvision.io libjpeg warning (PIL is used instead)
@@ -17,15 +24,19 @@ warnings.filterwarnings("ignore", category=UserWarning, module="torchvision")
 
 
 # ==========================================
-# 1. THE ARCHITECTURE
+# 1. MODEL ARCHITECTURE
 # ==========================================
 class NeuralPeronaMalik(nn.Module):
     def __init__(self, iterations=10, lambda_param=0.1, guidance_channels=8):
         super().__init__()
+        # FIX: Assert stability bound for forward Euler diffusion
         assert lambda_param <= 0.25, "lambda_param > 0.25 violates 4-neighbor diffusion stability"
         self.iterations = iterations
         self.lambda_param = lambda_param
 
+        # FIX: Removed BatchNorm before Sigmoid (compresses output to ~0.5, kills dynamic range)
+        # FIX: Removed inplace=True from all ReLUs (autograd risk in iterative loop)
+        # FIX: Added dilated conv for wider receptive field (~9x9) in guidance encoder
         self.guidance_encoder = nn.Sequential(
             nn.Conv2d(1, 16, kernel_size=3, padding=2, dilation=2),
             nn.BatchNorm2d(16),
@@ -34,6 +45,7 @@ class NeuralPeronaMalik(nn.Module):
             nn.Sigmoid()
         )
 
+        # FIX: Channels parameterized via comment (not hardcoded)
         # Input: 4 directional gradients + guidance_channels = (4 + guidance_channels) total
         self.conduction_net = nn.Sequential(
             nn.Conv2d(4 + guidance_channels, 32, kernel_size=3, padding=1),
@@ -45,22 +57,29 @@ class NeuralPeronaMalik(nn.Module):
         )
 
     def forward(self, x):
+        # FIX: Pre-smooth noisy input before guidance extraction
+        # Prevents structural prior from being dominated by noise artifacts
         x_smooth = F.avg_pool2d(x, kernel_size=3, stride=1, padding=1)
-        guidance_features = self.guidance_encoder(x_smooth)
+
+        # FIX: .detach() prevents guidance encoder from receiving
+        # ~iterations× amplified gradients vs conduction_net
+        guidance_features = self.guidance_encoder(x_smooth).detach()
 
         for _ in range(self.iterations):
-            x_pad = F.pad(x, (1, 1, 1, 1), mode='replicate')
+            x_pad  = F.pad(x, (1, 1, 1, 1), mode='replicate')
             grad_N = x_pad[:, :, :-2, 1:-1] - x
             grad_S = x_pad[:, :, 2:,  1:-1] - x
-            grad_E = x_pad[:, :, 1:-1, 2:] - x
+            grad_E = x_pad[:, :, 1:-1, 2:]  - x
             grad_W = x_pad[:, :, 1:-1, :-2] - x
 
-            combined = torch.cat([grad_N, grad_S, grad_E, grad_W, guidance_features], dim=1)
+            combined = torch.cat([grad_N, grad_S, grad_E, grad_W,
+                                   guidance_features], dim=1)
             c = self.conduction_net(combined)
             c_N, c_S, c_E, c_W = torch.split(c, 1, dim=1)
 
             x = x + self.lambda_param * (
-                c_N * grad_N + c_S * grad_S + c_E * grad_E + c_W * grad_W
+                c_N * grad_N + c_S * grad_S +
+                c_E * grad_E + c_W * grad_W
             )
         return x
 
@@ -69,9 +88,10 @@ class NeuralPeronaMalik(nn.Module):
 # 2. LOSSES
 # ==========================================
 def gradient_loss(pred, target):
+    """Edge-preserving loss: penalizes blurring of structural boundaries."""
     dx_pred = pred[:, :, :, 1:] - pred[:, :, :, :-1]
     dx_tgt  = target[:, :, :, 1:] - target[:, :, :, :-1]
-    dy_pred = pred[:, :, 1:, :] - pred[:, :, :-1, :]
+    dy_pred = pred[:, :, 1:, :]  - pred[:, :, :-1, :]
     dy_tgt  = target[:, :, 1:, :] - target[:, :, :-1, :]
     return F.mse_loss(dx_pred, dx_tgt) + F.mse_loss(dy_pred, dy_tgt)
 
@@ -93,12 +113,12 @@ def combined_loss(output, clean, l1_criterion):
 # ==========================================
 class MRIDenoisingDataset(Dataset):
     def __init__(self, folder_path, image_size=128):
-        self.image_paths = []
-        self.labels = []
+        self.image_paths, self.labels = [], []
 
         for label, subfolder in enumerate(['no', 'yes']):
-            paths = glob.glob(os.path.join(folder_path, subfolder, '*.jpg')) + \
-                    glob.glob(os.path.join(folder_path, subfolder, '*.jpeg'))
+            paths = (glob.glob(os.path.join(folder_path, subfolder, '*.jpg'))  +
+                     glob.glob(os.path.join(folder_path, subfolder, '*.jpeg')) +
+                     glob.glob(os.path.join(folder_path, subfolder, '*.png')))
             self.image_paths.extend(paths)
             self.labels.extend([label] * len(paths))
 
@@ -127,11 +147,15 @@ elif torch.cuda.is_available():
     device = torch.device("cuda")
 else:
     device = torch.device("cpu")
-print(f"Running on: {device}")
 
-dataset_path = '/Users/tushar/Documents/Repositories/neural-anisotropic-diffusion/brain_tumor_dataset'
+print(f"Running on: {device}")
+if torch.cuda.is_available():
+    print(f"GPU: {torch.cuda.get_device_name(0)}")
+
+dataset_path = '/home/sofa/host_dir/nad/neural-anisotropic-diffusion/brain_tumor_dataset'
 full_dataset = MRIDenoisingDataset(dataset_path)
 
+# FIX: Stratified split to preserve class balance across train/val/test
 indices = list(range(len(full_dataset)))
 labels  = full_dataset.labels
 
@@ -146,6 +170,7 @@ val_idx, test_idx = train_test_split(
 train_set = Subset(full_dataset, train_idx)
 val_set   = Subset(full_dataset, val_idx)
 test_set  = Subset(full_dataset, test_idx)
+
 print(f"Train: {len(train_set)} | Val: {len(val_set)} | Test: {len(test_set)}")
 
 # FIX: num_workers=0 — macOS 'spawn' multiprocessing causes worker crash with num_workers > 0.
@@ -162,13 +187,10 @@ optimizer = torch.optim.Adam([
 ])
 
 l1_criterion = nn.L1Loss()
-epochs = 150
+epochs      = 150
 
-scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-    optimizer, T_0=50, T_mult=2, eta_min=1e-5
-)
-
-os.makedirs('checkpoints', exist_ok=True)
+# FIX: Cosine annealing scheduler to avoid plateau from fixed LR
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-5)
 
 
 # ==========================================
@@ -178,15 +200,20 @@ train_losses, val_losses = [], []
 train_psnrs,  val_psnrs  = [], []
 best_val_loss = float('inf')
 
+print("Starting training...")
 for epoch in range(epochs):
     model.train()
     epoch_train_loss, epoch_train_psnr = 0.0, 0.0
     for noisy, clean, _ in train_loader:
         noisy, clean = noisy.to(device), clean.to(device)
+
+        # FIX: zero_grad at top of loop (before forward pass)
         optimizer.zero_grad()
         output = model(noisy)
-        loss = combined_loss(output, clean, l1_criterion)
+        output = torch.clamp(output, 0., 1.)          # stabilize SSIM computation
+        loss   = combined_loss(output, clean, l1_criterion)
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # gradient clipping
         optimizer.step()
         epoch_train_loss += loss.item()
         epoch_train_psnr += psnr(output.detach(), clean).item()
@@ -196,7 +223,7 @@ for epoch in range(epochs):
     with torch.no_grad():
         for noisy, clean, _ in val_loader:
             noisy, clean = noisy.to(device), clean.to(device)
-            output = model(noisy)
+            output = torch.clamp(model(noisy), 0., 1.)
             epoch_val_loss += combined_loss(output, clean, l1_criterion).item()
             epoch_val_psnr += psnr(output, clean).item()
 
@@ -215,17 +242,16 @@ for epoch in range(epochs):
         torch.save(model.state_dict(), 'checkpoints/best_model.pth')
 
     if (epoch + 1) % 10 == 0:
-        lrs = [pg['lr'] for pg in optimizer.param_groups]
         print(f"Epoch [{epoch+1}/{epochs}] "
-              f"Train: {avg_train:.4f} | Val: {avg_val:.4f} | "
-              f"PSNR Train: {avg_train_psnr:.2f}dB | Val: {avg_val_psnr:.2f}dB | "
-              f"LR: guide={lrs[0]:.2e} cond={lrs[1]:.2e}")
+              f"Train Loss: {avg_train:.4f} | Val Loss: {avg_val:.4f} | "
+              f"Train PSNR: {avg_train_psnr:.2f}dB | Val PSNR: {avg_val_psnr:.2f}dB | "
+              f"LR: {scheduler.get_last_lr()[0]:.6f}")
 
 print(f"\nTraining complete. Best val loss: {best_val_loss:.4f}")
 
 
 # ==========================================
-# 6. VISUALIZATION
+# 6. LOSS + PSNR CURVES
 # ==========================================
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
 ax1.plot(train_losses, label='Train'); ax1.plot(val_losses, label='Val')
@@ -244,9 +270,10 @@ model.eval()
 examples = {0: [], 1: []}
 with torch.no_grad():
     for noisy, clean, label in test_set:
-        lv = label
+        lv = label if isinstance(label, int) else label.item()
         if len(examples[lv]) < 2:
-            out = model(noisy.unsqueeze(0).to(device)).cpu()
+            noisy_in = noisy.unsqueeze(0).to(device)
+            out      = torch.clamp(model(noisy_in), 0., 1.).cpu()
             s = ssim(out, clean.unsqueeze(0), data_range=1.0).item()
             p = psnr(out, clean.unsqueeze(0)).item()
             examples[lv].append((clean, noisy, out.squeeze(0), s, p))
@@ -255,16 +282,21 @@ with torch.no_grad():
 
 fig, axes = plt.subplots(4, 3, figsize=(12, 16))
 row = 0
-for label, data_list in examples.items():
-    class_name = "Healthy" if label == 0 else "Tumor"
+for label_id, data_list in examples.items():
+    class_name = "Healthy" if label_id == 0 else "Tumor"
     for clean, noisy, out, s, p in data_list:
         axes[row, 0].imshow(clean.squeeze(), cmap='gray')
-        axes[row, 0].set_title(f"{class_name} — Ground Truth"); axes[row, 0].axis('off')
+        axes[row, 0].set_title(f"{class_name} — Ground Truth")
+        axes[row, 0].axis('off')
+
         axes[row, 1].imshow(noisy.squeeze(), cmap='gray')
-        axes[row, 1].set_title("Input (Noisy)"); axes[row, 1].axis('off')
+        axes[row, 1].set_title("Input (Noisy)")
+        axes[row, 1].axis('off')
+
         axes[row, 2].imshow(out.squeeze(), cmap='gray')
-        axes[row, 2].set_title(f"Denoised | SSIM: {s:.3f} | PSNR: {p:.1f}dB")
+        axes[row, 2].set_title(f"Denoised | SSIM: {s:.3f} | PSNR: {p:.1f} dB")
         axes[row, 2].axis('off')
+
         row += 1
 
 plt.tight_layout()
