@@ -7,6 +7,7 @@ import torch.nn.functional as F
 import torchvision.transforms as transforms
 from torch.utils.data import Dataset, DataLoader
 import matplotlib.pyplot as plt
+from pytorch_msssim import ssim
 
 # ==========================================
 # 1. THE MODEL ARCHITECTURE
@@ -111,7 +112,8 @@ for epoch in range(epochs):
         clean_imgs = clean_imgs.to(device)
         
         denoised_imgs = model(noisy_imgs)
-        loss = criterion(denoised_imgs, clean_imgs)
+        #loss = criterion(denoised_imgs, clean_imgs)
+        loss = (1 - ssim(denoised_imgs, clean_imgs, data_range=1)) + 0.5 * criterion(denoised_imgs, clean_imgs)
         
         optimizer.zero_grad()
         loss.backward()
