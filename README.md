@@ -11,8 +11,7 @@ The core model is a PyTorch module that unrolls $T$ discrete steps of the diffus
 * **Loss:** The network is trained in a supervised manner using Mean Squared Error (MSE) against clean, uncorrupted ground-truth images.
 
 ## Dataset
-This project is designed to work with high-contrast medical imaging datasets. The current implementation supports:
-* **Synthetic Corruption:** The data loader dynamically injects severe Gaussian/speckle noise into clean images to generate supervised training pairs.
+This project is designed to work with high-contrast medical imaging datasets. The current implementation supports Synthetic Corruption (The data loader dynamically injects severe Gaussian/speckle noise into clean images to generate supervised training pair) and this entire pipeline has been train-validated-tested on a Brain MRI Dataset from [Kaggle](https://www.kaggle.com/datasets/hasimdev/brain-mri-dataset)
 
 ## Requirements
 * Python 3.8+
@@ -22,8 +21,6 @@ This project is designed to work with high-contrast medical imaging datasets. Th
 * Matplotlib (for visualizing diffusion results)
 
 ## Usage
-*(Note: Update this section with your actual script names once you finalize them)*
-
 1. Clone the repository:
    ```bash
    git clone [https://github.com/tushar-nayak/neural-anisotropic-diffusion.git](https://github.com/tushar-nayak/neural-anisotropic-diffusion.git)
