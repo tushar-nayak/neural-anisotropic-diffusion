@@ -18,13 +18,23 @@ class NeuralPeronaMalik(nn.Module):
         self.iterations = iterations
         self.lambda_param = lambda_param
         
-        # --- 1. THE GUIDANCE BRANCH ---
-        # This branch runs ONCE to create a "semantic map" of the image.
+        # ADDED BATCHNORM: This helps the encoder find edges in the first few epochs
         self.guidance_encoder = nn.Sequential(
             nn.Conv2d(1, 16, kernel_size=3, padding=1),
+            nn.BatchNorm2d(16),
             nn.ReLU(inplace=True),
             nn.Conv2d(16, guidance_channels, kernel_size=3, padding=1),
-            nn.Sigmoid() # Keeps features normalized
+            nn.BatchNorm2d(guidance_channels),
+            nn.Sigmoid() 
+        )
+        
+        self.conduction_net = nn.Sequential(
+            nn.Conv2d(4 + guidance_channels, 32, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(32, 16, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(16, 4, kernel_size=3, padding=1),
+            nn.Sigmoid() 
         )
         
         # --- 2. THE ENHANCED CONDUCTION NET ---
@@ -112,7 +122,7 @@ print(f"Successfully loaded {len(dataset)} images.")
 
 # TWEAK 1: Lowered lambda_param from 0.1 to 0.05 for tighter control
 model = NeuralPeronaMalik(iterations=10, lambda_param=0.1).to(device)
-optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
 # TWEAK 2: Swapped MSE for L1 Loss to punish blurriness 
 criterion = nn.L1Loss()
