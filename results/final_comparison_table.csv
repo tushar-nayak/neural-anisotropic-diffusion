@@ -1,0 +1,5 @@
+Method,PSNR (dB),SSIM
+Gaussian Smoothing,23.94,0.591
+Skimage TV,24.314,0.604
+Classical PM (8 iter),22.524,0.494
+Neural Perona-Malik (Ours),26.561,0.712
