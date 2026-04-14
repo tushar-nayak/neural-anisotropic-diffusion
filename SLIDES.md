@@ -11,6 +11,7 @@
 - Unrolled PDE-based restoration for brain MRI slices
 - Learnable conduction coefficients instead of fixed diffusion rules
 - Unified final implementation in `main.py`
+- Suggested visual: `presentation/title_slide_graphic.png`
 
 **Speaker notes**
 
@@ -56,6 +57,7 @@ Instead of using a hand-designed conduction function, the model learns where to 
   - Rician
   - Speckle
   - Mixed
+- Suggested visual: no figure required, or a small cropped montage of clean vs noisy slices if you create one later
 
 **Speaker notes**
 
@@ -71,6 +73,7 @@ The dataset is small, so the model is trained as a denoiser rather than a classi
   - 4-neighbor or 8-neighbor gradients
   - sigmoid-constrained conduction coefficients
 - Optional residual refinement stage
+- Suggested visual: `presentation/unified_architecture_diagram.png`
 
 **Speaker notes**
 
@@ -85,6 +88,7 @@ The architecture has three parts: guidance extraction, iterative diffusion, and 
 - Gradient loss
 - Final weighting:
   - `SSIM + L1 + 0.1 * gradient_loss`
+- Suggested visual: `presentation/unified_loss_curves.png` on the right side if you want to connect the loss to the objective visually.
 
 **Speaker notes**
 
@@ -99,6 +103,7 @@ The loss is designed to care about both perceptual structure and pixel fidelity.
 - Gradient clipping
 - Best validation checkpoint saved
 - Baselines evaluated on the same test set
+- Suggested visual: `presentation/unified_loss_curves.png`
 
 **Speaker notes**
 
@@ -108,12 +113,8 @@ The final script is designed to run locally or over SSH. It writes plots and a C
 
 ## Slide 8: Quantitative results
 
-| Method | PSNR (dB) | SSIM |
-| --- | ---: | ---: |
-| Gaussian Smoothing | 19.996 | 0.549 |
-| Skimage TV | 20.068 | 0.558 |
-| Classical PM (16 iter) | 20.005 | 0.498 |
-| Unified Neural PDE (Ours) | 23.612 | 0.657 |
+- Suggested visual: `presentation/unified_comparison_plot.png`
+- Optional supporting table: `presentation/unified_comparison_table.csv`
 
 **Speaker notes**
 
@@ -127,6 +128,7 @@ On the held-out test split, the unified model clearly outperforms the classical 
 - Loss decreased steadily over training
 - PSNR improved quickly early on and then plateaued
 - Validation oscillation remained moderate
+- Suggested visual: `presentation/unified_loss_curves.png`
 
 **Speaker notes**
 
@@ -140,6 +142,7 @@ The training curve shows a stable learning process rather than collapse or diver
 - Brain structure remains recognizable
 - Large-scale contrast is preserved
 - Fine boundaries are still somewhat over-smoothed
+- Suggested visual: `presentation/unified_qualitative_results.png`
 
 **Speaker notes**
 
@@ -154,6 +157,7 @@ The figure shows that the model behaves as intended, but it is not perfect. It p
 - One dataset and one split
 - Some detail loss remains
 - No external clinical validation yet
+- Suggested visual: none, or reuse a cropped panel from `presentation/unified_qualitative_results.png` if you want to highlight failure cases.
 
 **Speaker notes**
 
@@ -167,6 +171,7 @@ These limitations matter. The model is promising, but not a deployed medical too
 - The unified branch is runnable and documented
 - The method beats the classical baselines on this setup
 - Next steps: more data, more realism, better detail preservation
+- Suggested visual: `presentation/unified_comparison_plot.png` or no image if you prefer a closing text slide
 
 **Speaker notes**
 
@@ -187,3 +192,18 @@ make smoke
 **Speaker notes**
 
 The `make run` target executes the full experiment. The `make smoke` target is a short sanity check that is useful for quick verification or demos.
+
+---
+
+## Presentation asset folder
+
+Put these files into your slide deck from the `presentation/` folder:
+
+- `presentation/unified_loss_curves.png`
+- `presentation/unified_qualitative_results.png`
+- `presentation/unified_architecture_diagram.png`
+- `presentation/title_slide_graphic.png`
+- `presentation/unified_comparison_plot.png`
+- `presentation/unified_comparison_table.csv`
+
+If you want to keep the deck fully visual, the first three files are the ones to place directly onto slides.
