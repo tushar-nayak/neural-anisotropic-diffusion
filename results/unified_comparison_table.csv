@@ -1,5 +1,0 @@
-Method,PSNR (dB),SSIM
-Gaussian Smoothing,24.132,0.594
-Skimage TV,24.597,0.619
-Classical PM (8 iter),22.882,0.495
-Unified Neural PDE (Ours),20.871,0.374

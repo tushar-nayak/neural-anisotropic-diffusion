@@ -1,7 +1,0 @@
-Method,PSNR (dB),SSIM
-Gaussian Smoothing,23.053,0.549
-Skimage TV,23.153,0.552
-Classical PM (6 iter),19.968,0.395
-Ours (No Guidance),25.394,0.629
-Ours (No Text/Grad Loss),26.376,0.687
-Ours (Full Model w/ VGG),23.684,0.593
