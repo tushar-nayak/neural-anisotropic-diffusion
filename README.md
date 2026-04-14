@@ -12,7 +12,7 @@ This repository contains a unified, working version of a learned Perona-Malik st
   - a 4-neighbor or 8-neighbor PDE update
   - a MiniUNet guidance encoder
   - a residual refinement stage
-- Saves:
+- Writes local outputs for:
   - training curves
   - qualitative examples
   - a comparison table against Gaussian smoothing, classical Perona-Malik, and TV denoising
@@ -22,11 +22,9 @@ The main entry point is [`main.py`](/home/sofa/host_dir/nad/neural-anisotropic-d
 ## Repository Layout
 
 - [`main.py`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/main.py): unified runnable version
-- [`main-legacy.py`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/main-legacy.py): older 4-neighbor experiment
-- [`ultimate.py`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/ultimate.py): 8-neighbor hybrid experiment with refinement
+- [`Makefile`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/Makefile): `run` and `smoke` targets
+- [`requirements.txt`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/requirements.txt): dependency list
 - [`brain_tumor_dataset/`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/brain_tumor_dataset): local MRI dataset
-- [`results/`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/results): generated plots and CSVs
-- [`checkpoints/`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/checkpoints): saved model weights
 
 ## Requirements
 
@@ -55,6 +53,12 @@ Run the default unified model:
 python main.py
 ```
 
+Or use the make target:
+
+```bash
+make run
+```
+
 Useful flags:
 
 ```bash
@@ -68,6 +72,12 @@ python main.py --no-refinement
 python main.py --no-unet-guidance
 ```
 
+For a fast sanity check:
+
+```bash
+make smoke
+```
+
 Default behavior:
 
 - `neighbor-mode=8`
@@ -79,15 +89,16 @@ Default behavior:
 
 ## Outputs
 
-The unified script writes:
+The unified script writes these files locally when you run it:
 
-- [`results/unified_loss_curves.png`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/results/unified_loss_curves.png)
-- [`results/unified_qualitative_results.png`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/results/unified_qualitative_results.png)
-- [`results/unified_comparison_table.csv`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/results/unified_comparison_table.csv)
-- [`checkpoints/unified_model.pth`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/checkpoints/unified_model.pth)
+- `results/unified_loss_curves.png`
+- `results/unified_qualitative_results.png`
+- `results/unified_comparison_table.csv`
+- `checkpoints/unified_model.pth`
 
 ## Notes
 
 - The dataset is treated as a denoising benchmark, not a classifier.
 - The `no` and `yes` folder labels are used for stratified splitting and for labeling qualitative examples.
 - The script is headless-safe and uses the Agg matplotlib backend, so it runs over SSH or in a non-GUI environment.
+- The repository is intentionally cleaned to keep only the unified source, docs, and reproducibility files.
