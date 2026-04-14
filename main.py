@@ -1,463 +1,433 @@
 # ============================================================
-# Neural Anisotropic Diffusion — Final Champion Model
-# Optimized for pure L1 + SSIM PDE unrolling
+# Neural Anisotropic Diffusion - Unified Final Working Version
+# 4/8-Neighbor PDE + Learnable Guidance + Optional Refinement
 # ============================================================
-import matplotlib
-matplotlib.use('Agg')   
-import matplotlib.pyplot as plt
-
+import argparse
 import os
 import glob
 import warnings
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
 import numpy as np
 import pandas as pd
+from PIL import Image
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.transforms as transforms
-from torch.utils.data import Dataset, DataLoader, Subset
 from sklearn.model_selection import train_test_split
-from PIL import Image
-from pytorch_msssim import ssim
+from torch.utils.data import Dataset, DataLoader, Subset
 
-<<<<<<< HEAD
-# Suppress harmless torchvision.io libjpeg warning (PIL is used instead)
-warnings.filterwarnings("ignore", category=UserWarning, module="torchvision")
-=======
-# Classical Baseline Imports
 from scipy.ndimage import gaussian_filter
 from skimage.restoration import denoise_tv_chambolle
 from skimage.metrics import structural_similarity as skimage_ssim
 from skimage.metrics import peak_signal_noise_ratio as skimage_psnr
->>>>>>> 2a07c1c (.)
 
 
-# ==========================================
-# 1. OPTIMIZED MODEL ARCHITECTURE
-# ==========================================
-class NeuralPeronaMalik(nn.Module):
-    def __init__(self, iterations=8, lambda_param=0.1, guidance_channels=8):
-        super().__init__()
-<<<<<<< HEAD
-        # FIX: Assert stability bound for forward Euler diffusion
-        assert lambda_param <= 0.25, "lambda_param > 0.25 violates 4-neighbor diffusion stability"
-        self.iterations = iterations
-        self.lambda_param = lambda_param
+warnings.filterwarnings("ignore", category=UserWarning, module="torchvision")
 
-        # FIX: Removed BatchNorm before Sigmoid (compresses output to ~0.5, kills dynamic range)
-        # FIX: Removed inplace=True from all ReLUs (autograd risk in iterative loop)
-        # FIX: Added dilated conv for wider receptive field (~9x9) in guidance encoder
-=======
-        assert lambda_param <= 0.25, "lambda_param > 0.25 violates stability"
+try:
+    from pytorch_msssim import ssim
+except ImportError:
+    def _gaussian_window(window_size, sigma, device, dtype):
+        coords = torch.arange(window_size, device=device, dtype=dtype) - window_size // 2
+        g = torch.exp(-(coords ** 2) / (2 * sigma ** 2))
+        g = g / g.sum()
+        window = (g[:, None] * g[None, :]).unsqueeze(0).unsqueeze(0)
+        return window
 
-        self.iterations = iterations
-        self.lambda_param = lambda_param
+    def ssim(x, y, data_range=1.0, window_size=11, sigma=1.5, size_average=True):
+        channel = x.size(1)
+        window = _gaussian_window(window_size, sigma, x.device, x.dtype).repeat(channel, 1, 1, 1)
+        padding = window_size // 2
 
-        # The Guidance Encoder: Pre-smoothes and finds anatomical edges
->>>>>>> 2a07c1c (.)
-        self.guidance_encoder = nn.Sequential(
-            nn.Conv2d(1, 16, kernel_size=3, padding=2, dilation=2),
-            nn.BatchNorm2d(16),
-            nn.ReLU(inplace=False),
-            nn.Conv2d(16, guidance_channels, kernel_size=3, padding=1),
-            nn.Sigmoid()
+        mu_x = F.conv2d(x, window, padding=padding, groups=channel)
+        mu_y = F.conv2d(y, window, padding=padding, groups=channel)
+
+        mu_x2 = mu_x * mu_x
+        mu_y2 = mu_y * mu_y
+        mu_xy = mu_x * mu_y
+
+        sigma_x2 = F.conv2d(x * x, window, padding=padding, groups=channel) - mu_x2
+        sigma_y2 = F.conv2d(y * y, window, padding=padding, groups=channel) - mu_y2
+        sigma_xy = F.conv2d(x * y, window, padding=padding, groups=channel) - mu_xy
+
+        c1 = (0.01 * data_range) ** 2
+        c2 = (0.03 * data_range) ** 2
+
+        ssim_map = ((2 * mu_xy + c1) * (2 * sigma_xy + c2)) / (
+            (mu_x2 + mu_y2 + c1) * (sigma_x2 + sigma_y2 + c2)
         )
 
-<<<<<<< HEAD
-        # FIX: Channels parameterized via comment (not hardcoded)
-        # Input: 4 directional gradients + guidance_channels = (4 + guidance_channels) total
-=======
-        # The Conduction Network: Learns the 4-neighbor diffusion coefficients
->>>>>>> 2a07c1c (.)
-        self.conduction_net = nn.Sequential(
-            nn.Conv2d(4 + guidance_channels, 32, kernel_size=3, padding=1),
-            nn.ReLU(inplace=False),
-            nn.Conv2d(32, 16, kernel_size=3, padding=1),
-            nn.ReLU(inplace=False),
-            nn.Conv2d(16, 4, kernel_size=3, padding=1),
-            nn.Sigmoid()
+        return ssim_map.mean() if size_average else ssim_map.flatten(1).mean(dim=1)
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATASET_PATH = os.path.join(BASE_DIR, "brain_tumor_dataset")
+CHECKPOINT_DIR = os.path.join(BASE_DIR, "checkpoints")
+RESULTS_DIR = os.path.join(BASE_DIR, "results")
+
+
+class MiniUNet(nn.Module):
+    """Compact global context encoder for guidance features."""
+
+    def __init__(self, in_ch=1, out_ch=8):
+        super().__init__()
+        self.enc1 = nn.Sequential(
+            nn.Conv2d(in_ch, 16, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+        )
+        self.pool = nn.MaxPool2d(2)
+        self.enc2 = nn.Sequential(
+            nn.Conv2d(16, 32, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+        )
+        self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
+        self.dec = nn.Sequential(
+            nn.Conv2d(32 + 16, 16, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(16, out_ch, kernel_size=3, padding=1),
+            nn.Sigmoid(),
         )
 
     def forward(self, x):
-<<<<<<< HEAD
-        # FIX: Pre-smooth noisy input before guidance extraction
-        # Prevents structural prior from being dominated by noise artifacts
-        x_smooth = F.avg_pool2d(x, kernel_size=3, stride=1, padding=1)
+        e1 = self.enc1(x)
+        e2 = self.enc2(self.pool(e1))
+        return self.dec(torch.cat([self.up(e2), e1], dim=1))
 
-        # FIX: .detach() prevents guidance encoder from receiving
-        # ~iterations× amplified gradients vs conduction_net
-=======
+
+class SimpleGuidanceEncoder(nn.Module):
+    """Lightweight guidance encoder for the legacy 4-neighbor setup."""
+
+    def __init__(self, out_ch=8):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Conv2d(1, 16, kernel_size=3, padding=2, dilation=2),
+            nn.BatchNorm2d(16),
+            nn.ReLU(inplace=False),
+            nn.Conv2d(16, out_ch, kernel_size=3, padding=1),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+
+class UnifiedNeuralPeronaMalik(nn.Module):
+    def __init__(
+        self,
+        iterations=16,
+        lambda_param=0.05,
+        guidance_channels=8,
+        neighbor_mode=8,
+        use_refinement=True,
+        use_unet_guidance=True,
+    ):
+        super().__init__()
+
+        if neighbor_mode not in (4, 8):
+            raise ValueError("neighbor_mode must be 4 or 8")
+
+        self.iterations = iterations
+        self.lambda_param = lambda_param
+        self.neighbor_mode = neighbor_mode
+        self.use_refinement = use_refinement
+
+        if neighbor_mode == 4:
+            assert lambda_param <= 0.25, "lambda_param > 0.25 violates 4-neighbor stability"
+        else:
+            assert lambda_param <= 0.125, "lambda_param > 0.125 violates 8-neighbor stability"
+
+        self.guidance_encoder = MiniUNet(1, guidance_channels) if use_unet_guidance else SimpleGuidanceEncoder(guidance_channels)
+
+        in_ch = neighbor_mode + guidance_channels
+        self.conduction_net = nn.Sequential(
+            nn.Conv2d(in_ch, 32, kernel_size=3, padding=1),
+            nn.ReLU(inplace=False),
+            nn.Conv2d(32, 16, kernel_size=3, padding=1),
+            nn.ReLU(inplace=False),
+            nn.Conv2d(16, neighbor_mode, kernel_size=3, padding=1),
+            nn.Sigmoid(),
+        )
+
+        self.refinement_net = nn.Sequential(
+            nn.Conv2d(1, 16, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(16, 1, kernel_size=3, padding=1),
+        )
+
+    def _neighbor_gradients(self, x):
+        x_pad = F.pad(x, (1, 1, 1, 1), mode="replicate")
+        grad_n = x_pad[:, :, :-2, 1:-1] - x
+        grad_s = x_pad[:, :, 2:, 1:-1] - x
+        grad_e = x_pad[:, :, 1:-1, 2:] - x
+        grad_w = x_pad[:, :, 1:-1, :-2] - x
+        grads = [grad_n, grad_s, grad_e, grad_w]
+
+        if self.neighbor_mode == 8:
+            scale = 0.707
+            grad_nw = (x_pad[:, :, :-2, :-2] - x) * scale
+            grad_ne = (x_pad[:, :, :-2, 2:] - x) * scale
+            grad_sw = (x_pad[:, :, 2:, :-2] - x) * scale
+            grad_se = (x_pad[:, :, 2:, 2:] - x) * scale
+            grads.extend([grad_nw, grad_ne, grad_sw, grad_se])
+
+        return grads
+
+    def forward(self, x):
         x_smooth = F.avg_pool2d(x, kernel_size=3, stride=1, padding=1)
->>>>>>> 2a07c1c (.)
         guidance_features = self.guidance_encoder(x_smooth).detach()
 
         for _ in range(self.iterations):
-            x_pad  = F.pad(x, (1, 1, 1, 1), mode='replicate')
-            grad_N = x_pad[:, :, :-2, 1:-1] - x
-            grad_S = x_pad[:, :, 2:,  1:-1] - x
-            grad_E = x_pad[:, :, 1:-1, 2:]  - x
-            grad_W = x_pad[:, :, 1:-1, :-2] - x
+            grads = self._neighbor_gradients(x)
+            combined = torch.cat(grads + [guidance_features], dim=1)
+            coeffs = self.conduction_net(combined)
+            coeffs = torch.split(coeffs, 1, dim=1)
 
-            combined = torch.cat([grad_N, grad_S, grad_E, grad_W, guidance_features], dim=1)
-            c = self.conduction_net(combined)
-            c_N, c_S, c_E, c_W = torch.split(c, 1, dim=1)
+            update = 0.0
+            for c, g in zip(coeffs, grads):
+                update = update + c * g
+            x = x + self.lambda_param * update
 
-            x = x + self.lambda_param * (
-                c_N * grad_N + c_S * grad_S +
-                c_E * grad_E + c_W * grad_W
-            )
+        if self.use_refinement:
+            x = x + self.refinement_net(x)
+
         return x
 
 
-# ==========================================
-# 2. PURE STRUCTURAL LOSS
-# ==========================================
-<<<<<<< HEAD
 def gradient_loss(pred, target):
-    """Edge-preserving loss: penalizes blurring of structural boundaries."""
     dx_pred = pred[:, :, :, 1:] - pred[:, :, :, :-1]
-    dx_tgt  = target[:, :, :, 1:] - target[:, :, :, :-1]
-    dy_pred = pred[:, :, 1:, :]  - pred[:, :, :-1, :]
-    dy_tgt  = target[:, :, 1:, :] - target[:, :, :-1, :]
+    dx_tgt = target[:, :, :, 1:] - target[:, :, :, :-1]
+    dy_pred = pred[:, :, 1:, :] - pred[:, :, :-1, :]
+    dy_tgt = target[:, :, 1:, :] - target[:, :, :-1, :]
     return F.mse_loss(dx_pred, dx_tgt) + F.mse_loss(dy_pred, dy_tgt)
 
 
-def psnr(pred, target):
-    mse = F.mse_loss(pred, target)
-    return 10 * torch.log10(1.0 / (mse + 1e-8))
-
-
-def combined_loss(output, clean, l1_criterion):
-    ssim_loss = 1 - ssim(output, clean, data_range=1.0)
-    l1        = l1_criterion(output, clean)
-    grad      = gradient_loss(output, clean)
-    return ssim_loss + 1.0 * l1 + 0.25 * grad
-=======
 def psnr_metric(pred, target):
     mse = F.mse_loss(pred, target)
     return 10 * torch.log10(1.0 / (mse + 1e-8))
 
-def combined_loss(output, clean, l1_fn):
-    """
-    Stripped of VGG and Gradient losses. 
-    Relies purely on L1 (pixel fidelity) and SSIM (structural/perceptual fidelity).
-    """
+
+def combined_loss(output, clean, l1_fn, grad_weight=0.1):
     ssim_l = 1.0 - ssim(output, clean, data_range=1.0)
-    l1_l   = l1_fn(output, clean)
-    return ssim_l + l1_l
->>>>>>> 2a07c1c (.)
+    l1_l = l1_fn(output, clean)
+    grad_l = gradient_loss(output, clean)
+    return ssim_l + l1_l + grad_weight * grad_l
 
 
-# ==========================================
-# 3. CLASSICAL BASELINES & DATASET
-# ==========================================
-def classical_perona_malik(img, iterations=8, kappa=0.1, gamma=0.1):
+def classical_perona_malik(img, iterations=16, kappa=0.1, gamma=0.05):
     u = img.copy()
     for _ in range(iterations):
         n = np.roll(u, -1, axis=0) - u
         s = np.roll(u, 1, axis=0) - u
         e = np.roll(u, -1, axis=1) - u
         w = np.roll(u, 1, axis=1) - u
-        
-        c_n = 1 / (1 + (np.abs(n)/kappa)**2)
-        c_s = 1 / (1 + (np.abs(s)/kappa)**2)
-        c_e = 1 / (1 + (np.abs(e)/kappa)**2)
-        c_w = 1 / (1 + (np.abs(w)/kappa)**2)
-        
-        u = u + gamma * (c_n*n + c_s*s + c_e*e + c_w*w)
+
+        c_n = 1 / (1 + (np.abs(n) / kappa) ** 2)
+        c_s = 1 / (1 + (np.abs(s) / kappa) ** 2)
+        c_e = 1 / (1 + (np.abs(e) / kappa) ** 2)
+        c_w = 1 / (1 + (np.abs(w) / kappa) ** 2)
+
+        u = u + gamma * (c_n * n + c_s * s + c_e * e + c_w * w)
+
     return np.clip(u, 0, 1)
 
+
 class MRIDenoisingDataset(Dataset):
-    def __init__(self, folder_path, image_size=128):
-        self.image_paths, self.labels = [], []
-        for label, subfolder in enumerate(['no', 'yes']):
-            paths = (glob.glob(os.path.join(folder_path, subfolder, '*.jpg'))  +
-                     glob.glob(os.path.join(folder_path, subfolder, '*.jpeg')) +
-                     glob.glob(os.path.join(folder_path, subfolder, '*.png')))
+    def __init__(self, folder_path, image_size=128, noise_type="rician", sigma_range=(0.05, 0.20)):
+        self.image_paths = []
+        self.labels = []
+        self.noise_type = noise_type
+        self.sigma_range = sigma_range
+
+        for label, subfolder in enumerate(["no", "yes"]):
+            paths = (
+                glob.glob(os.path.join(folder_path, subfolder, "*.jpg"))
+                + glob.glob(os.path.join(folder_path, subfolder, "*.jpeg"))
+                + glob.glob(os.path.join(folder_path, subfolder, "*.png"))
+            )
             self.image_paths.extend(paths)
             self.labels.extend([label] * len(paths))
 
-        self.transform = transforms.Compose([
-            transforms.Resize((image_size, image_size)),
-            transforms.ToTensor()
-        ])
+        self.transform = transforms.Compose(
+            [
+                transforms.Resize((image_size, image_size)),
+                transforms.ToTensor(),
+            ]
+        )
 
     def __len__(self):
         return len(self.image_paths)
 
+    def _apply_noise(self, clean_tensor):
+        sigma = torch.empty(1).uniform_(*self.sigma_range).item()
+
+        if self.noise_type == "gaussian":
+            noisy = clean_tensor + torch.randn_like(clean_tensor) * sigma
+        elif self.noise_type == "speckle":
+            noisy = clean_tensor + clean_tensor * torch.randn_like(clean_tensor) * sigma
+        elif self.noise_type == "mixed":
+            choice = np.random.choice(["gaussian", "rician", "speckle"])
+            if choice == "gaussian":
+                noisy = clean_tensor + torch.randn_like(clean_tensor) * sigma
+            elif choice == "speckle":
+                noisy = clean_tensor + clean_tensor * torch.randn_like(clean_tensor) * sigma
+            else:
+                noise_real = torch.randn_like(clean_tensor) * sigma
+                noise_imag = torch.randn_like(clean_tensor) * sigma
+                noisy = torch.sqrt((clean_tensor + noise_real) ** 2 + noise_imag ** 2)
+        else:
+            noise_real = torch.randn_like(clean_tensor) * sigma
+            noise_imag = torch.randn_like(clean_tensor) * sigma
+            noisy = torch.sqrt((clean_tensor + noise_real) ** 2 + noise_imag ** 2)
+
+        return torch.clamp(noisy, 0.0, 1.0)
+
     def __getitem__(self, idx):
-        clean_tensor = self.transform(Image.open(self.image_paths[idx]).convert('L'))
-<<<<<<< HEAD
-        sigma = torch.empty(1).uniform_(0.10, 0.20).item()
-        noise = torch.randn_like(clean_tensor) * sigma
-        noisy_tensor = torch.clamp(clean_tensor + noise, 0., 1.)
-=======
-        sigma = torch.empty(1).uniform_(0.05, 0.25).item()
-        noisy_tensor = torch.clamp(clean_tensor + torch.randn_like(clean_tensor) * sigma, 0., 1.)
->>>>>>> 2a07c1c (.)
+        clean_tensor = self.transform(Image.open(self.image_paths[idx]).convert("L"))
+        noisy_tensor = self._apply_noise(clean_tensor)
         return noisy_tensor, clean_tensor, self.labels[idx]
 
 
-# ==========================================
-# 4. SETUP & TRAINING RUNNER
-# ==========================================
-if __name__ == "__main__":
-    device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Running on: {device}")
+def build_dataloaders(dataset, batch_size=8, seed=42, num_workers=0):
+    indices = list(range(len(dataset)))
+    labels = dataset.labels
 
-    dataset_path = '/home/sofa/host_dir/nad/neural-anisotropic-diffusion/brain_tumor_dataset'
-    full_dataset = MRIDenoisingDataset(dataset_path)
+    train_idx, temp_idx = train_test_split(
+        indices, test_size=0.30, stratify=labels, random_state=seed
+    )
+    temp_labels = [labels[i] for i in temp_idx]
+    val_idx, test_idx = train_test_split(
+        temp_idx, test_size=0.50, stratify=temp_labels, random_state=seed
+    )
 
-    train_idx, temp_idx = train_test_split(list(range(len(full_dataset))), test_size=0.30, stratify=full_dataset.labels, random_state=42)
-    temp_labels = [full_dataset.labels[i] for i in temp_idx]
-    val_idx, test_idx = train_test_split(temp_idx, test_size=0.50, stratify=temp_labels, random_state=42)
+    train_set = Subset(dataset, train_idx)
+    val_set = Subset(dataset, val_idx)
+    test_set = Subset(dataset, test_idx)
 
-<<<<<<< HEAD
-# FIX: Stratified split to preserve class balance across train/val/test
-indices = list(range(len(full_dataset)))
-labels  = full_dataset.labels
+    pin_memory = torch.cuda.is_available()
+    train_loader = DataLoader(
+        train_set,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+    )
+    val_loader = DataLoader(
+        val_set,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+    )
+    test_loader = DataLoader(test_set, batch_size=1, shuffle=False)
 
-train_idx, temp_idx = train_test_split(
-    indices, test_size=0.30, stratify=labels, random_state=42
-)
-temp_labels = [labels[i] for i in temp_idx]
-val_idx, test_idx = train_test_split(
-    temp_idx, test_size=0.50, stratify=temp_labels, random_state=42
-)
-
-train_set = Subset(full_dataset, train_idx)
-val_set   = Subset(full_dataset, val_idx)
-test_set  = Subset(full_dataset, test_idx)
-
-print(f"Train: {len(train_set)} | Val: {len(val_set)} | Test: {len(test_set)}")
-
-# FIX: num_workers=0 — macOS 'spawn' multiprocessing causes worker crash with num_workers > 0.
-# pin_memory removed — only benefits CUDA, has no effect on MPS.
-train_loader = DataLoader(train_set, batch_size=8, shuffle=True)
-val_loader   = DataLoader(val_set,   batch_size=8, shuffle=False)
-test_loader  = DataLoader(test_set,  batch_size=1, shuffle=False)
-
-model = NeuralPeronaMalik(iterations=10, lambda_param=0.1).to(device)
-
-optimizer = torch.optim.Adam([
-    {'params': model.guidance_encoder.parameters(), 'lr': 1e-4},
-    {'params': model.conduction_net.parameters(),   'lr': 1e-3}
-])
-
-l1_criterion = nn.L1Loss()
-epochs      = 150
-
-# FIX: Cosine annealing scheduler to avoid plateau from fixed LR
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-5)
+    return train_set, val_set, test_set, train_loader, val_loader, test_loader
 
 
-# ==========================================
-# 5. TRAINING LOOP
-# ==========================================
-train_losses, val_losses = [], []
-train_psnrs,  val_psnrs  = [], []
-best_val_loss = float('inf')
+def get_device():
+    if torch.backends.mps.is_available():
+        return torch.device("mps")
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    return torch.device("cpu")
 
-print("Starting training...")
-for epoch in range(epochs):
-    model.train()
-    epoch_train_loss, epoch_train_psnr = 0.0, 0.0
-    for noisy, clean, _ in train_loader:
-        noisy, clean = noisy.to(device), clean.to(device)
 
-        # FIX: zero_grad at top of loop (before forward pass)
-        optimizer.zero_grad()
-        output = model(noisy)
-        output = torch.clamp(output, 0., 1.)          # stabilize SSIM computation
-        loss   = combined_loss(output, clean, l1_criterion)
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # gradient clipping
-        optimizer.step()
-        epoch_train_loss += loss.item()
-        epoch_train_psnr += psnr(output.detach(), clean).item()
-
-    model.eval()
-    epoch_val_loss, epoch_val_psnr = 0.0, 0.0
-    with torch.no_grad():
-        for noisy, clean, _ in val_loader:
-=======
-    train_set = Subset(full_dataset, train_idx)
-    val_set   = Subset(full_dataset, val_idx)
-    test_set  = Subset(full_dataset, test_idx)
-
-    train_loader = DataLoader(train_set, batch_size=8, shuffle=True, num_workers=2, pin_memory=True)
-    val_loader   = DataLoader(val_set, batch_size=8, shuffle=False, num_workers=2, pin_memory=True)
-    test_loader  = DataLoader(test_set, batch_size=1, shuffle=False)
-
-    os.makedirs('checkpoints', exist_ok=True)
-    os.makedirs('results', exist_ok=True)
-
-    # --- Initialize Champion Model ---
-    epochs = 300
-    model = NeuralPeronaMalik(iterations=8).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-    l1_criterion = nn.L1Loss()
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-5)
-
-    best_val_loss = float('inf')
-    best_model_path = 'checkpoints/champion_model.pth'
-
-    print("\n--- Training Champion Model ---")
-    for epoch in range(epochs):
-        model.train()
-        for noisy, clean, _ in train_loader:
->>>>>>> 2a07c1c (.)
-            noisy, clean = noisy.to(device), clean.to(device)
-            optimizer.zero_grad()
-            output = torch.clamp(model(noisy), 0., 1.)
-            loss = combined_loss(output, clean, l1_criterion)
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
-
-        model.eval()
-        epoch_val_loss = 0.0
-        with torch.no_grad():
-            for noisy, clean, _ in val_loader:
-                noisy, clean = noisy.to(device), clean.to(device)
-                output = torch.clamp(model(noisy), 0., 1.)
-                epoch_val_loss += combined_loss(output, clean, l1_criterion).item()
-        
-        avg_val = epoch_val_loss / len(val_loader)
-        scheduler.step()
-
-        if avg_val < best_val_loss:
-            best_val_loss = avg_val
-            torch.save(model.state_dict(), best_model_path)
-            
-        if (epoch + 1) % 50 == 0 or epoch == 0:
-            print(f"Epoch {epoch+1}/{epochs} - Val Loss: {avg_val:.4f}")
-
-    print(f"Training Complete. Best Val Loss: {best_val_loss:.4f}")
-
-    # ==========================================
-    # 5. FINAL EVALUATION & VISUALIZATION
-    # ==========================================
-    print("\n--- Running Final Evaluations ---")
-    model.load_state_dict(torch.load(best_model_path, map_location=device, weights_only=True))
-    model.eval()
-    
-    psnrs, ssims = [], []
+def evaluate_model(model, loader, device):
+    psnrs = []
+    ssims = []
     examples = {0: [], 1: []}
-    
+
+    model.eval()
     with torch.no_grad():
-        for noisy, clean, label in test_loader:
-            noisy, clean = noisy.to(device), clean.to(device)
-            out = torch.clamp(model(noisy), 0., 1.)
-            
+        for noisy, clean, label in loader:
+            noisy = noisy.to(device)
+            clean = clean.to(device)
+            out = torch.clamp(model(noisy), 0.0, 1.0)
+
             p = psnr_metric(out, clean).item()
             s = ssim(out, clean, data_range=1.0).item()
             psnrs.append(p)
             ssims.append(s)
 
-<<<<<<< HEAD
-    if (epoch + 1) % 10 == 0:
-        print(f"Epoch [{epoch+1}/{epochs}] "
-              f"Train Loss: {avg_train:.4f} | Val Loss: {avg_val:.4f} | "
-              f"Train PSNR: {avg_train_psnr:.2f}dB | Val PSNR: {avg_val_psnr:.2f}dB | "
-              f"LR: {scheduler.get_last_lr()[0]:.6f}")
-=======
-            # Save examples for visualization
             lv = label.item()
             if len(examples[lv]) < 2:
                 examples[lv].append((clean.cpu(), noisy.cpu(), out.cpu(), s, p))
->>>>>>> 2a07c1c (.)
 
-    # --- Generate Qualitative Results Image ---
+    return psnrs, ssims, examples
+
+
+def save_loss_plot(train_losses, val_losses, train_psnrs, val_psnrs, path):
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+    ax1.plot(train_losses, label="Train")
+    ax1.plot(val_losses, label="Val")
+    ax1.set_title("Combined Loss (SSIM + L1 + Gradient)")
+    ax1.set_xlabel("Epoch")
+    ax1.legend()
+    ax1.grid(True)
+
+    ax2.plot(train_psnrs, label="Train")
+    ax2.plot(val_psnrs, label="Val")
+    ax2.set_title("PSNR (dB)")
+    ax2.set_xlabel("Epoch")
+    ax2.set_ylabel("dB")
+    ax2.legend()
+    ax2.grid(True)
+
+    plt.tight_layout()
+    plt.savefig(path, dpi=150)
+    plt.close()
+
+
+def save_qualitative_plot(examples, path):
     fig, axes = plt.subplots(4, 3, figsize=(12, 16))
     row = 0
+
     for label_id, data_list in examples.items():
         class_name = "Healthy" if label_id == 0 else "Tumor"
         for clean_img, noisy_img, out_img, s, p in data_list:
-            axes[row, 0].imshow(clean_img.squeeze(), cmap='gray')
-            axes[row, 0].set_title(f"{class_name} — Ground Truth"); axes[row, 0].axis('off')
+            axes[row, 0].imshow(clean_img.squeeze(), cmap="gray")
+            axes[row, 0].set_title(f"{class_name} - Ground Truth")
+            axes[row, 0].axis("off")
 
-            axes[row, 1].imshow(noisy_img.squeeze(), cmap='gray')
-            axes[row, 1].set_title("Input (Noisy)"); axes[row, 1].axis('off')
+            axes[row, 1].imshow(noisy_img.squeeze(), cmap="gray")
+            axes[row, 1].set_title("Input (Noisy)")
+            axes[row, 1].axis("off")
 
-<<<<<<< HEAD
-# ==========================================
-# 6. LOSS + PSNR CURVES
-# ==========================================
-fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
-ax1.plot(train_losses, label='Train'); ax1.plot(val_losses, label='Val')
-ax1.set_title("Loss (SSIM + L1 + Gradient)")
-ax1.set_xlabel("Epoch"); ax1.legend(); ax1.grid(True)
-ax2.plot(train_psnrs, label='Train'); ax2.plot(val_psnrs, label='Val')
-ax2.set_title("PSNR (dB)")
-ax2.set_xlabel("Epoch"); ax2.set_ylabel("dB"); ax2.legend(); ax2.grid(True)
-plt.tight_layout()
-plt.savefig('loss_curves.png', dpi=150)
-plt.show()
-
-model.load_state_dict(torch.load('checkpoints/best_model.pth', map_location=device))
-model.eval()
-
-examples = {0: [], 1: []}
-with torch.no_grad():
-    for noisy, clean, label in test_set:
-        lv = label if isinstance(label, int) else label.item()
-        if len(examples[lv]) < 2:
-            noisy_in = noisy.unsqueeze(0).to(device)
-            out      = torch.clamp(model(noisy_in), 0., 1.).cpu()
-            s = ssim(out, clean.unsqueeze(0), data_range=1.0).item()
-            p = psnr(out, clean.unsqueeze(0)).item()
-            examples[lv].append((clean, noisy, out.squeeze(0), s, p))
-        if len(examples[0]) == 2 and len(examples[1]) == 2:
-            break
-
-fig, axes = plt.subplots(4, 3, figsize=(12, 16))
-row = 0
-for label_id, data_list in examples.items():
-    class_name = "Healthy" if label_id == 0 else "Tumor"
-    for clean, noisy, out, s, p in data_list:
-        axes[row, 0].imshow(clean.squeeze(), cmap='gray')
-        axes[row, 0].set_title(f"{class_name} — Ground Truth")
-        axes[row, 0].axis('off')
-
-        axes[row, 1].imshow(noisy.squeeze(), cmap='gray')
-        axes[row, 1].set_title("Input (Noisy)")
-        axes[row, 1].axis('off')
-
-        axes[row, 2].imshow(out.squeeze(), cmap='gray')
-        axes[row, 2].set_title(f"Denoised | SSIM: {s:.3f} | PSNR: {p:.1f} dB")
-        axes[row, 2].axis('off')
-
-        row += 1
-
-plt.tight_layout()
-plt.savefig('qualitative_results.png', dpi=150)
-plt.show()
-=======
-            axes[row, 2].imshow(out_img.squeeze(), cmap='gray')
+            axes[row, 2].imshow(out_img.squeeze(), cmap="gray")
             axes[row, 2].set_title(f"Denoised | SSIM: {s:.3f} | PSNR: {p:.1f} dB")
-            axes[row, 2].axis('off')
+            axes[row, 2].axis("off")
             row += 1
 
     plt.tight_layout()
-    plt.savefig('results/champion_qualitative_results.png', dpi=150)
+    plt.savefig(path, dpi=150)
     plt.close()
-    print("Saved: results/champion_qualitative_results.png")
 
-    # --- Evaluate Baselines & Generate Final CSV ---
-    res = {"Gaussian": {"psnr": [], "ssim": []},
-           "Classic PM": {"psnr": [], "ssim": []},
-           "Skimage TV": {"psnr": [], "ssim": []}}
-    
-    for noisy, clean, _ in test_loader:
-        n_img = noisy.squeeze().numpy()
-        c_img = clean.squeeze().numpy()
-        
+
+def save_comparison_table(test_batches, model_psnrs, model_ssims, path, neighbor_mode):
+    res = {
+        "Gaussian": {"psnr": [], "ssim": []},
+        "Classic PM": {"psnr": [], "ssim": []},
+        "Skimage TV": {"psnr": [], "ssim": []},
+    }
+
+    pm_iterations = 16 if neighbor_mode == 8 else 8
+    pm_gamma = 0.05 if neighbor_mode == 8 else 0.1
+
+    for noisy, clean, _ in test_batches:
+        n_img = noisy.squeeze().cpu().numpy()
+        c_img = clean.squeeze().cpu().numpy()
+
         g_out = gaussian_filter(n_img, sigma=1.0)
         res["Gaussian"]["psnr"].append(skimage_psnr(c_img, g_out, data_range=1.0))
         res["Gaussian"]["ssim"].append(skimage_ssim(c_img, g_out, data_range=1.0))
-        
-        pm_out = classical_perona_malik(n_img, iterations=8, kappa=0.1, gamma=0.1)
+
+        pm_out = classical_perona_malik(
+            n_img, iterations=pm_iterations, kappa=0.1, gamma=pm_gamma
+        )
         res["Classic PM"]["psnr"].append(skimage_psnr(c_img, pm_out, data_range=1.0))
         res["Classic PM"]["ssim"].append(skimage_ssim(c_img, pm_out, data_range=1.0))
 
@@ -465,22 +435,186 @@ plt.show()
         res["Skimage TV"]["psnr"].append(skimage_psnr(c_img, tv_out, data_range=1.0))
         res["Skimage TV"]["ssim"].append(skimage_ssim(c_img, tv_out, data_range=1.0))
 
-    baseline_results = {k: (np.mean(v["psnr"]), np.mean(v["ssim"])) for k, v in res.items()}
+    baseline_results = {
+        k: (np.mean(v["psnr"]), np.mean(v["ssim"])) for k, v in res.items()
+    }
 
+    method_name = "Unified Neural PDE (Ours)"
     results_data = [
-        {"Method": "Gaussian Smoothing", "PSNR (dB)": baseline_results["Gaussian"][0], "SSIM": baseline_results["Gaussian"][1]},
-        {"Method": "Skimage TV", "PSNR (dB)": baseline_results["Skimage TV"][0], "SSIM": baseline_results["Skimage TV"][1]},
-        {"Method": "Classical PM (8 iter)", "PSNR (dB)": baseline_results["Classic PM"][0], "SSIM": baseline_results["Classic PM"][1]},
-        {"Method": "Neural Perona-Malik (Ours)", "PSNR (dB)": np.mean(psnrs), "SSIM": np.mean(ssims)},
+        {
+            "Method": "Gaussian Smoothing",
+            "PSNR (dB)": baseline_results["Gaussian"][0],
+            "SSIM": baseline_results["Gaussian"][1],
+        },
+        {
+            "Method": "Skimage TV",
+            "PSNR (dB)": baseline_results["Skimage TV"][0],
+            "SSIM": baseline_results["Skimage TV"][1],
+        },
+        {
+            "Method": f"Classical PM ({pm_iterations} iter)",
+            "PSNR (dB)": baseline_results["Classic PM"][0],
+            "SSIM": baseline_results["Classic PM"][1],
+        },
+        {
+            "Method": method_name,
+            "PSNR (dB)": np.mean(model_psnrs),
+            "SSIM": np.mean(model_ssims),
+        },
     ]
 
     df = pd.DataFrame(results_data).round(3)
-    
     print("\n=======================================================")
-    print("                FINAL COMPARISON TABLE                 ")
+    print("                 FINAL COMPARISON TABLE                ")
     print("=======================================================")
     print(df.to_markdown(index=False))
-    
-    df.to_csv("results/final_comparison_table.csv", index=False)
-    print("\nSaved: results/final_comparison_table.csv")
->>>>>>> 2a07c1c (.)
+    df.to_csv(path, index=False)
+    print(f"\nSaved: {path}")
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Unified Neural Anisotropic Diffusion")
+    parser.add_argument("--neighbor-mode", type=int, default=8, choices=[4, 8])
+    parser.add_argument("--noise-type", type=str, default="rician", choices=["gaussian", "rician", "speckle", "mixed"])
+    parser.add_argument("--iterations", type=int, default=None)
+    parser.add_argument("--lambda-param", type=float, default=None)
+    parser.add_argument("--epochs", type=int, default=300)
+    parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--image-size", type=int, default=128)
+    parser.add_argument("--grad-weight", type=float, default=0.1)
+    parser.add_argument("--no-refinement", action="store_true")
+    parser.add_argument("--no-unet-guidance", action="store_true")
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    device = get_device()
+    print(f"Running on: {device}")
+    if torch.cuda.is_available():
+        print(f"GPU: {torch.cuda.get_device_name(0)}")
+
+    iterations = args.iterations if args.iterations is not None else (16 if args.neighbor_mode == 8 else 10)
+    lambda_param = args.lambda_param if args.lambda_param is not None else (0.05 if args.neighbor_mode == 8 else 0.1)
+
+    dataset = MRIDenoisingDataset(
+        DATASET_PATH,
+        image_size=args.image_size,
+        noise_type=args.noise_type,
+    )
+
+    if len(dataset) == 0:
+        raise RuntimeError(f"No images found at: {DATASET_PATH}")
+
+    train_set, val_set, test_set, train_loader, val_loader, test_loader = build_dataloaders(
+        dataset, batch_size=args.batch_size, num_workers=0
+    )
+    print(
+        f"Dataset split - Train: {len(train_set)} | Val: {len(val_set)} | Test: {len(test_set)}"
+    )
+
+    os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+
+    model = UnifiedNeuralPeronaMalik(
+        iterations=iterations,
+        lambda_param=lambda_param,
+        neighbor_mode=args.neighbor_mode,
+        use_refinement=not args.no_refinement,
+        use_unet_guidance=not args.no_unet_guidance,
+    ).to(device)
+
+    optimizer = torch.optim.Adam(
+        [
+            {"params": model.guidance_encoder.parameters(), "lr": 1e-4},
+            {"params": model.conduction_net.parameters(), "lr": 1e-3},
+            {"params": model.refinement_net.parameters(), "lr": 1e-3},
+        ]
+    )
+    l1_criterion = nn.L1Loss()
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=args.epochs, eta_min=1e-5
+    )
+
+    best_model_path = os.path.join(CHECKPOINT_DIR, "unified_model.pth")
+    loss_plot_path = os.path.join(RESULTS_DIR, "unified_loss_curves.png")
+    qual_plot_path = os.path.join(RESULTS_DIR, "unified_qualitative_results.png")
+    comparison_path = os.path.join(RESULTS_DIR, "unified_comparison_table.csv")
+
+    train_losses, val_losses = [], []
+    train_psnrs, val_psnrs = [], []
+    best_val_loss = float("inf")
+
+    print("Starting training...")
+    for epoch in range(args.epochs):
+        model.train()
+        epoch_train_loss = 0.0
+        epoch_train_psnr = 0.0
+
+        for noisy, clean, _ in train_loader:
+            noisy = noisy.to(device)
+            clean = clean.to(device)
+
+            optimizer.zero_grad()
+            output = torch.clamp(model(noisy), 0.0, 1.0)
+            loss = combined_loss(output, clean, l1_criterion, grad_weight=args.grad_weight)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            optimizer.step()
+
+            epoch_train_loss += loss.item()
+            epoch_train_psnr += psnr_metric(output.detach(), clean).item()
+
+        model.eval()
+        epoch_val_loss = 0.0
+        epoch_val_psnr = 0.0
+        with torch.no_grad():
+            for noisy, clean, _ in val_loader:
+                noisy = noisy.to(device)
+                clean = clean.to(device)
+                output = torch.clamp(model(noisy), 0.0, 1.0)
+                epoch_val_loss += combined_loss(output, clean, l1_criterion, grad_weight=args.grad_weight).item()
+                epoch_val_psnr += psnr_metric(output, clean).item()
+
+        scheduler.step()
+
+        avg_train = epoch_train_loss / len(train_loader)
+        avg_val = epoch_val_loss / len(val_loader)
+        avg_train_psnr = epoch_train_psnr / len(train_loader)
+        avg_val_psnr = epoch_val_psnr / len(val_loader)
+
+        train_losses.append(avg_train)
+        val_losses.append(avg_val)
+        train_psnrs.append(avg_train_psnr)
+        val_psnrs.append(avg_val_psnr)
+
+        if avg_val < best_val_loss:
+            best_val_loss = avg_val
+            torch.save(model.state_dict(), best_model_path)
+
+        if (epoch + 1) % 10 == 0 or epoch == 0:
+            print(
+                f"Epoch [{epoch + 1:>3}/{args.epochs}] "
+                f"Train Loss: {avg_train:.4f} | Val Loss: {avg_val:.4f} | "
+                f"Train PSNR: {avg_train_psnr:.2f} dB | Val PSNR: {avg_val_psnr:.2f} dB | "
+                f"LR: {scheduler.get_last_lr()[0]:.2e}"
+            )
+
+    print(f"\nTraining complete. Best val loss: {best_val_loss:.4f}")
+
+    save_loss_plot(train_losses, val_losses, train_psnrs, val_psnrs, loss_plot_path)
+    print(f"Saved: {loss_plot_path}")
+
+    model.load_state_dict(torch.load(best_model_path, map_location=device))
+    model.eval()
+
+    test_batches = list(test_loader)
+    model_psnrs, model_ssims, examples = evaluate_model(model, test_batches, device)
+    save_qualitative_plot(examples, qual_plot_path)
+    print(f"Saved: {qual_plot_path}")
+
+    save_comparison_table(test_batches, model_psnrs, model_ssims, comparison_path, args.neighbor_mode)
+
+
+if __name__ == "__main__":
+    main()

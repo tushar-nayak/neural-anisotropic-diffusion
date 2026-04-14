@@ -1,26 +1,93 @@
-# Neural Anisotropic Diffusion (Unrolled Partial Differential Equation)
+# Neural Anisotropic Diffusion
 
-Standard image smoothing filters often degrade critical structural boundaries in medical scans, such as tumor margins or bone structures. This project introduces a modern, deep-learning-based approach to the classical image relaxation methods (specifically, Perona-Malik anisotropic diffusion). Instead of relying on a static mathematical decay function for the conduction coefficient, this architecture unrolls the iterative steps of a Partial Differential Equation (PDE) solver. It replaces the mathematical coefficient with a spatially-aware, learnable Convolutional Neural Network (CNN) that predicts the optimal diffusion weights locally across the image. The result is a model that dynamically filters severe speckle and Gaussian noise while acting as a barrier to preserve critical anatomical edges.
+This repository contains a unified, working version of a learned Perona-Malik style image denoiser for brain MRI slices. The model unrolls a PDE-style diffusion process and predicts spatially varying conduction weights with a neural network so it can smooth noise while trying to preserve edges.
 
-## Architecture
-The core model is a PyTorch module that unrolls $T$ discrete steps of the diffusion equation. 
-* **Input:** A noisy medical image.
-* **Gradients:** Calculates spatial gradients (North, South, East, West) using finite differences.
-* **Neural Conduction Predictor:** A lightweight, 3-layer CNN processes the stacked directional gradients and outputs four localized conduction coefficients constrained between [0, 1] via a Sigmoid activation.
-* **Update Step:** Applies the discrete PDE update using the predicted, spatially-aware weights.
-* **Loss:** The network is trained in a supervised manner using Mean Squared Error (MSE) against clean, uncorrupted ground-truth images.
+## What the unified script does
 
-## Dataset
-This project is designed to work with high-contrast medical imaging datasets. The current implementation supports Synthetic Corruption (The data loader dynamically injects severe Gaussian/speckle noise into clean images to generate supervised training pair) and this entire pipeline has been train-validated-tested on a Brain MRI Dataset from [Kaggle](https://www.kaggle.com/datasets/hasimdev/brain-mri-dataset)
+- Loads grayscale MRI slices from [`brain_tumor_dataset/`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/brain_tumor_dataset).
+- Splits the data into stratified train, validation, and test sets.
+- Synthesizes noise on the fly using Gaussian, Rician, speckle, or mixed corruption.
+- Trains a learnable anisotropic diffusion model with SSIM + L1 + gradient loss.
+- Optionally uses:
+  - a 4-neighbor or 8-neighbor PDE update
+  - a MiniUNet guidance encoder
+  - a residual refinement stage
+- Saves:
+  - training curves
+  - qualitative examples
+  - a comparison table against Gaussian smoothing, classical Perona-Malik, and TV denoising
+
+The main entry point is [`main.py`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/main.py).
+
+## Repository Layout
+
+- [`main.py`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/main.py): unified runnable version
+- [`main-legacy.py`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/main-legacy.py): older 4-neighbor experiment
+- [`ultimate.py`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/ultimate.py): 8-neighbor hybrid experiment with refinement
+- [`brain_tumor_dataset/`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/brain_tumor_dataset): local MRI dataset
+- [`results/`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/results): generated plots and CSVs
+- [`checkpoints/`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/checkpoints): saved model weights
 
 ## Requirements
-* Python 3.8+
-* PyTorch (MPS/CUDA supported for hardware acceleration)
-* Torchvision
-* NumPy
-* Matplotlib (for visualizing diffusion results)
+
+- Python 3.8+
+- PyTorch
+- torchvision
+- numpy
+- pandas
+- matplotlib
+- scikit-learn
+- Pillow
+- scipy
+- scikit-image
+
+Optional:
+
+- `pytorch_msssim` for the SSIM loss implementation
+
+If `pytorch_msssim` is not installed, `main.py` falls back to a local Torch SSIM implementation.
 
 ## Usage
-1. Clone the repository:
-   ```bash
-   git clone [https://github.com/tushar-nayak/neural-anisotropic-diffusion.git](https://github.com/tushar-nayak/neural-anisotropic-diffusion.git)
+
+Run the default unified model:
+
+```bash
+python main.py
+```
+
+Useful flags:
+
+```bash
+python main.py --neighbor-mode 4
+python main.py --neighbor-mode 8
+python main.py --noise-type gaussian
+python main.py --noise-type rician
+python main.py --iterations 16 --lambda-param 0.05
+python main.py --epochs 300 --batch-size 8
+python main.py --no-refinement
+python main.py --no-unet-guidance
+```
+
+Default behavior:
+
+- `neighbor-mode=8`
+- `noise-type=rician`
+- `iterations=16` for 8-neighbor mode
+- `lambda-param=0.05` for 8-neighbor mode
+- `iterations=10` for 4-neighbor mode
+- `lambda-param=0.1` for 4-neighbor mode
+
+## Outputs
+
+The unified script writes:
+
+- [`results/unified_loss_curves.png`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/results/unified_loss_curves.png)
+- [`results/unified_qualitative_results.png`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/results/unified_qualitative_results.png)
+- [`results/unified_comparison_table.csv`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/results/unified_comparison_table.csv)
+- [`checkpoints/unified_model.pth`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/checkpoints/unified_model.pth)
+
+## Notes
+
+- The dataset is treated as a denoising benchmark, not a classifier.
+- The `no` and `yes` folder labels are used for stratified splitting and for labeling qualitative examples.
+- The script is headless-safe and uses the Agg matplotlib backend, so it runs over SSH or in a non-GUI environment.
