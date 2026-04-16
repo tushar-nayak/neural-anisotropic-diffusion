@@ -4,7 +4,7 @@ This repository contains a unified, working version of a learned Perona-Malik st
 
 ## What the unified script does
 
-- Loads grayscale MRI slices from [`brain_tumor_dataset/`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/brain_tumor_dataset).
+- Loads grayscale MRI slices from the local Br35H Kaggle download in [`brain_tumor_dataset/`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/brain_tumor_dataset).
 - Splits the data into stratified train, validation, and test sets.
 - Synthesizes noise on the fly using Gaussian, Rician, speckle, or mixed corruption.
 - Trains a learnable anisotropic diffusion model with SSIM + L1 + gradient loss.
@@ -24,7 +24,8 @@ The main entry point is [`main.py`](/home/sofa/host_dir/nad/neural-anisotropic-d
 - [`main.py`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/main.py): unified runnable version
 - [`Makefile`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/Makefile): `run` and `smoke` targets
 - [`requirements.txt`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/requirements.txt): dependency list
-- [`brain_tumor_dataset/`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/brain_tumor_dataset): local MRI dataset
+- [`download_br35h_dataset.py`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/download_br35h_dataset.py): downloads the Br35H Kaggle dataset into the repo-local `brain_tumor_dataset/` path
+- `brain_tumor_dataset/`: local Br35H MRI dataset, ignored by Git
 
 ## Requirements
 
@@ -76,6 +77,12 @@ For a fast sanity check:
 
 ```bash
 make smoke
+```
+
+Download or refresh the Br35H dataset locally:
+
+```bash
+python download_br35h_dataset.py
 ```
 
 Default behavior:

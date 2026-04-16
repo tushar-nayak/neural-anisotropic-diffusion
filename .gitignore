@@ -2,6 +2,10 @@
 *.DS_Store
 *.md
 
+# Local datasets and KaggleHub cache.
+brain_tumor_dataset/
+.kagglehub_cache/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
