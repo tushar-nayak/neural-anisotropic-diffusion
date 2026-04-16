@@ -1,0 +1,46 @@
+Br35H interrupted 300-epoch run checkpoint evaluation
+
+Command started:
+python -u main.py --epochs 300 --results-dir results_300epochs --checkpoint-dir checkpoints_300epochs
+
+Status:
+The run was stopped after the validation metrics had largely flattened. The
+last captured training log was epoch 110/300. The best checkpoint saved before
+stopping was evaluated afterward to produce the comparison table in this folder.
+
+Last captured training log:
+- Epoch 110/300
+- Train loss: 0.3356
+- Validation loss: 0.3482
+- Train PSNR: 24.32 dB
+- Validation PSNR: 24.28 dB
+- Learning rate: 7.33e-05
+
+Best printed validation points before stopping:
+- Epoch 50: validation loss 0.3419, validation PSNR 23.97 dB
+- Epoch 90: validation loss 0.3415, validation PSNR 24.35 dB
+- Epoch 100: validation loss 0.3444, validation PSNR 24.35 dB
+- Epoch 110: validation loss 0.3482, validation PSNR 24.28 dB
+
+Checkpoint evaluation:
+- Dataset split: 2100 train / 450 validation / 450 test
+- Model checkpoint: checkpoints_300epochs/unified_model.pth
+- Model test PSNR: 24.586 dB
+- Model test SSIM: 0.713
+
+Expanded comparison:
+- Noisy Input: PSNR 17.578 dB, SSIM 0.423
+- Gaussian Smoothing: PSNR 18.919 dB, SSIM 0.550
+- Median Filter: PSNR 19.438 dB, SSIM 0.519
+- Bilateral Filter: PSNR 18.806 dB, SSIM 0.460
+- Non-Local Means: PSNR 20.261 dB, SSIM 0.583
+- Wavelet Denoising: PSNR 19.393 dB, SSIM 0.528
+- Skimage TV: PSNR 19.376 dB, SSIM 0.569
+- Classical PM (16 iter): PSNR 19.496 dB, SSIM 0.535
+- Unified Neural PDE: PSNR 24.586 dB, SSIM 0.713
+
+Observation:
+The interrupted long-run checkpoint improved over the archived short run
+(24.132 dB / 0.690 SSIM) and stayed well ahead of the strongest added baseline,
+non-local means (20.261 dB / 0.583 SSIM). The validation logs were no longer
+showing meaningful gains by epoch 110, so stopping was reasonable.
