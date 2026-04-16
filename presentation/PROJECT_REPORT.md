@@ -108,7 +108,12 @@ This balance was chosen to encourage structural fidelity while still keeping the
 The final evaluation compares the learned model to classical denoisers:
 
 - Gaussian smoothing
+- Median filtering
+- Bilateral filtering
+- Non-local means
+- Wavelet denoising
 - Classical Perona-Malik diffusion
+- Curvature flow
 - TV denoising via `skimage`
 
 These baselines are important because they show whether the learned PDE actually offers an advantage over standard hand-designed methods on the same images.

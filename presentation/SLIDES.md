@@ -107,7 +107,7 @@ The loss is designed to care about both perceptual structure and pixel fidelity.
 
 **Speaker notes**
 
-The final script is designed to run locally or over SSH. It writes plots and a CSV table automatically. The evaluation compares the learned model against Gaussian smoothing, classical Perona-Malik diffusion, and TV denoising.
+The final script is designed to run locally or over SSH. It writes plots and a CSV table automatically. The evaluation compares the learned model against Gaussian smoothing, median filtering, bilateral filtering, non-local means, wavelet denoising, classical Perona-Malik diffusion, curvature flow, and TV denoising.
 
 ---
 

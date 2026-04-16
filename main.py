@@ -245,6 +245,29 @@ def classical_perona_malik(img, iterations=16, kappa=0.1, gamma=0.05):
     return np.clip(u, 0, 1)
 
 
+def curvature_flow(img, iterations=16, gamma=0.05, eps=1e-6):
+    u = img.astype(np.float32, copy=True)
+    for _ in range(iterations):
+        ux = 0.5 * (np.roll(u, -1, axis=1) - np.roll(u, 1, axis=1))
+        uy = 0.5 * (np.roll(u, -1, axis=0) - np.roll(u, 1, axis=0))
+        uxx = np.roll(u, -1, axis=1) - 2.0 * u + np.roll(u, 1, axis=1)
+        uyy = np.roll(u, -1, axis=0) - 2.0 * u + np.roll(u, 1, axis=0)
+        uxy = 0.25 * (
+            np.roll(np.roll(u, -1, axis=0), -1, axis=1)
+            - np.roll(np.roll(u, -1, axis=0), 1, axis=1)
+            - np.roll(np.roll(u, 1, axis=0), -1, axis=1)
+            + np.roll(np.roll(u, 1, axis=0), 1, axis=1)
+        )
+
+        grad_sq = ux * ux + uy * uy
+        curvature_update = (
+            uxx * uy * uy - 2.0 * ux * uy * uxy + uyy * ux * ux
+        ) / (grad_sq + eps)
+        u = np.clip(u + gamma * curvature_update, 0.0, 1.0)
+
+    return u
+
+
 def estimate_noise_sigma(img):
     high_freq = img - gaussian_filter(img, sigma=1.0)
     mad = np.median(np.abs(high_freq - np.median(high_freq)))
@@ -431,11 +454,14 @@ def save_comparison_table(test_batches, model_psnrs, model_ssims, path, neighbor
         "Non-Local Means": {"psnr": [], "ssim": []},
         "Wavelet": {"psnr": [], "ssim": []},
         "Classic PM": {"psnr": [], "ssim": []},
+        "Curvature Flow": {"psnr": [], "ssim": []},
         "Skimage TV": {"psnr": [], "ssim": []},
     }
 
     pm_iterations = 16 if neighbor_mode == 8 else 8
     pm_gamma = 0.05 if neighbor_mode == 8 else 0.1
+    curvature_iterations = pm_iterations
+    curvature_gamma = pm_gamma
 
     for noisy, clean, _ in test_batches:
         n_img = noisy.squeeze().cpu().numpy()
@@ -494,6 +520,16 @@ def save_comparison_table(test_batches, model_psnrs, model_ssims, path, neighbor
         res["Classic PM"]["psnr"].append(skimage_psnr(c_img, pm_out, data_range=1.0))
         res["Classic PM"]["ssim"].append(skimage_ssim(c_img, pm_out, data_range=1.0))
 
+        curvature_out = curvature_flow(
+            n_img, iterations=curvature_iterations, gamma=curvature_gamma
+        )
+        res["Curvature Flow"]["psnr"].append(
+            skimage_psnr(c_img, curvature_out, data_range=1.0)
+        )
+        res["Curvature Flow"]["ssim"].append(
+            skimage_ssim(c_img, curvature_out, data_range=1.0)
+        )
+
         tv_out = denoise_tv_chambolle(n_img, weight=0.1)
         res["Skimage TV"]["psnr"].append(skimage_psnr(c_img, tv_out, data_range=1.0))
         res["Skimage TV"]["ssim"].append(skimage_ssim(c_img, tv_out, data_range=1.0))
@@ -538,6 +574,11 @@ def save_comparison_table(test_batches, model_psnrs, model_ssims, path, neighbor
             "Method": "Skimage TV",
             "PSNR (dB)": baseline_results["Skimage TV"][0],
             "SSIM": baseline_results["Skimage TV"][1],
+        },
+        {
+            "Method": f"Curvature Flow ({curvature_iterations} iter)",
+            "PSNR (dB)": baseline_results["Curvature Flow"][0],
+            "SSIM": baseline_results["Curvature Flow"][1],
         },
         {
             "Method": f"Classical PM ({pm_iterations} iter)",

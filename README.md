@@ -15,7 +15,7 @@ This repository contains a unified, working version of a learned Perona-Malik st
 - Writes local outputs for:
   - training curves
   - qualitative examples
-  - a comparison table against noisy input, Gaussian smoothing, median filtering, bilateral filtering, non-local means, wavelet denoising, classical Perona-Malik, and TV denoising
+  - a comparison table against noisy input, Gaussian smoothing, median filtering, bilateral filtering, non-local means, wavelet denoising, classical Perona-Malik, curvature flow, and TV denoising
 
 The main entry point is [`main.py`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/main.py).
 
