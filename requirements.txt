@@ -3,6 +3,7 @@ kagglehub
 numpy
 pandas
 Pillow
+PyWavelets
 scikit-image
 scikit-learn
 scipy

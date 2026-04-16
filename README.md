@@ -15,7 +15,7 @@ This repository contains a unified, working version of a learned Perona-Malik st
 - Writes local outputs for:
   - training curves
   - qualitative examples
-  - a comparison table against Gaussian smoothing, classical Perona-Malik, and TV denoising
+  - a comparison table against noisy input, Gaussian smoothing, median filtering, bilateral filtering, non-local means, wavelet denoising, classical Perona-Malik, and TV denoising
 
 The main entry point is [`main.py`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/main.py).
 
@@ -69,6 +69,7 @@ python main.py --noise-type gaussian
 python main.py --noise-type rician
 python main.py --iterations 16 --lambda-param 0.05
 python main.py --epochs 300 --batch-size 8
+python main.py --epochs 300 --results-dir results_300epochs --checkpoint-dir checkpoints_300epochs
 python main.py --no-refinement
 python main.py --no-unet-guidance
 ```

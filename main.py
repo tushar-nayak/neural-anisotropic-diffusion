@@ -22,8 +22,13 @@ import torchvision.transforms as transforms
 from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset, DataLoader, Subset
 
-from scipy.ndimage import gaussian_filter
-from skimage.restoration import denoise_tv_chambolle
+from scipy.ndimage import gaussian_filter, median_filter
+from skimage.restoration import (
+    denoise_bilateral,
+    denoise_nl_means,
+    denoise_tv_chambolle,
+    denoise_wavelet,
+)
 from skimage.metrics import structural_similarity as skimage_ssim
 from skimage.metrics import peak_signal_noise_ratio as skimage_psnr
 
@@ -69,6 +74,10 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATASET_PATH = os.path.join(BASE_DIR, "brain_tumor_dataset")
 CHECKPOINT_DIR = os.path.join(BASE_DIR, "checkpoints")
 RESULTS_DIR = os.path.join(BASE_DIR, "results")
+
+
+def resolve_repo_path(path):
+    return path if os.path.isabs(path) else os.path.join(BASE_DIR, path)
 
 
 class MiniUNet(nn.Module):
@@ -234,6 +243,12 @@ def classical_perona_malik(img, iterations=16, kappa=0.1, gamma=0.05):
         u = u + gamma * (c_n * n + c_s * s + c_e * e + c_w * w)
 
     return np.clip(u, 0, 1)
+
+
+def estimate_noise_sigma(img):
+    high_freq = img - gaussian_filter(img, sigma=1.0)
+    mad = np.median(np.abs(high_freq - np.median(high_freq)))
+    return max(float(mad / 0.6745), 1e-3)
 
 
 class MRIDenoisingDataset(Dataset):
@@ -409,7 +424,12 @@ def save_qualitative_plot(examples, path):
 
 def save_comparison_table(test_batches, model_psnrs, model_ssims, path, neighbor_mode):
     res = {
+        "Noisy Input": {"psnr": [], "ssim": []},
         "Gaussian": {"psnr": [], "ssim": []},
+        "Median": {"psnr": [], "ssim": []},
+        "Bilateral": {"psnr": [], "ssim": []},
+        "Non-Local Means": {"psnr": [], "ssim": []},
+        "Wavelet": {"psnr": [], "ssim": []},
         "Classic PM": {"psnr": [], "ssim": []},
         "Skimage TV": {"psnr": [], "ssim": []},
     }
@@ -421,9 +441,52 @@ def save_comparison_table(test_batches, model_psnrs, model_ssims, path, neighbor
         n_img = noisy.squeeze().cpu().numpy()
         c_img = clean.squeeze().cpu().numpy()
 
+        res["Noisy Input"]["psnr"].append(skimage_psnr(c_img, n_img, data_range=1.0))
+        res["Noisy Input"]["ssim"].append(skimage_ssim(c_img, n_img, data_range=1.0))
+
         g_out = gaussian_filter(n_img, sigma=1.0)
         res["Gaussian"]["psnr"].append(skimage_psnr(c_img, g_out, data_range=1.0))
         res["Gaussian"]["ssim"].append(skimage_ssim(c_img, g_out, data_range=1.0))
+
+        median_out = median_filter(n_img, size=3)
+        res["Median"]["psnr"].append(skimage_psnr(c_img, median_out, data_range=1.0))
+        res["Median"]["ssim"].append(skimage_ssim(c_img, median_out, data_range=1.0))
+
+        bilateral_out = denoise_bilateral(
+            n_img,
+            sigma_color=0.08,
+            sigma_spatial=3,
+            channel_axis=None,
+        )
+        bilateral_out = np.clip(bilateral_out, 0.0, 1.0)
+        res["Bilateral"]["psnr"].append(skimage_psnr(c_img, bilateral_out, data_range=1.0))
+        res["Bilateral"]["ssim"].append(skimage_ssim(c_img, bilateral_out, data_range=1.0))
+
+        sigma_est = estimate_noise_sigma(n_img)
+        nlm_out = denoise_nl_means(
+            n_img,
+            h=0.8 * sigma_est,
+            sigma=sigma_est,
+            patch_size=5,
+            patch_distance=6,
+            fast_mode=True,
+            channel_axis=None,
+        )
+        nlm_out = np.clip(nlm_out, 0.0, 1.0)
+        res["Non-Local Means"]["psnr"].append(skimage_psnr(c_img, nlm_out, data_range=1.0))
+        res["Non-Local Means"]["ssim"].append(skimage_ssim(c_img, nlm_out, data_range=1.0))
+
+        wavelet_out = denoise_wavelet(
+            n_img,
+            sigma=sigma_est,
+            method="BayesShrink",
+            mode="soft",
+            rescale_sigma=True,
+            channel_axis=None,
+        )
+        wavelet_out = np.clip(wavelet_out, 0.0, 1.0)
+        res["Wavelet"]["psnr"].append(skimage_psnr(c_img, wavelet_out, data_range=1.0))
+        res["Wavelet"]["ssim"].append(skimage_ssim(c_img, wavelet_out, data_range=1.0))
 
         pm_out = classical_perona_malik(
             n_img, iterations=pm_iterations, kappa=0.1, gamma=pm_gamma
@@ -442,9 +505,34 @@ def save_comparison_table(test_batches, model_psnrs, model_ssims, path, neighbor
     method_name = "Unified Neural PDE (Ours)"
     results_data = [
         {
+            "Method": "Noisy Input",
+            "PSNR (dB)": baseline_results["Noisy Input"][0],
+            "SSIM": baseline_results["Noisy Input"][1],
+        },
+        {
             "Method": "Gaussian Smoothing",
             "PSNR (dB)": baseline_results["Gaussian"][0],
             "SSIM": baseline_results["Gaussian"][1],
+        },
+        {
+            "Method": "Median Filter",
+            "PSNR (dB)": baseline_results["Median"][0],
+            "SSIM": baseline_results["Median"][1],
+        },
+        {
+            "Method": "Bilateral Filter",
+            "PSNR (dB)": baseline_results["Bilateral"][0],
+            "SSIM": baseline_results["Bilateral"][1],
+        },
+        {
+            "Method": "Non-Local Means",
+            "PSNR (dB)": baseline_results["Non-Local Means"][0],
+            "SSIM": baseline_results["Non-Local Means"][1],
+        },
+        {
+            "Method": "Wavelet Denoising",
+            "PSNR (dB)": baseline_results["Wavelet"][0],
+            "SSIM": baseline_results["Wavelet"][1],
         },
         {
             "Method": "Skimage TV",
@@ -482,6 +570,8 @@ def parse_args():
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--image-size", type=int, default=128)
     parser.add_argument("--grad-weight", type=float, default=0.1)
+    parser.add_argument("--results-dir", type=str, default=RESULTS_DIR)
+    parser.add_argument("--checkpoint-dir", type=str, default=CHECKPOINT_DIR)
     parser.add_argument("--no-refinement", action="store_true")
     parser.add_argument("--no-unet-guidance", action="store_true")
     return parser.parse_args()
@@ -513,8 +603,10 @@ def main():
         f"Dataset split - Train: {len(train_set)} | Val: {len(val_set)} | Test: {len(test_set)}"
     )
 
-    os.makedirs(CHECKPOINT_DIR, exist_ok=True)
-    os.makedirs(RESULTS_DIR, exist_ok=True)
+    checkpoint_dir = resolve_repo_path(args.checkpoint_dir)
+    results_dir = resolve_repo_path(args.results_dir)
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    os.makedirs(results_dir, exist_ok=True)
 
     model = UnifiedNeuralPeronaMalik(
         iterations=iterations,
@@ -536,10 +628,10 @@ def main():
         optimizer, T_max=args.epochs, eta_min=1e-5
     )
 
-    best_model_path = os.path.join(CHECKPOINT_DIR, "unified_model.pth")
-    loss_plot_path = os.path.join(RESULTS_DIR, "unified_loss_curves.png")
-    qual_plot_path = os.path.join(RESULTS_DIR, "unified_qualitative_results.png")
-    comparison_path = os.path.join(RESULTS_DIR, "unified_comparison_table.csv")
+    best_model_path = os.path.join(checkpoint_dir, "unified_model.pth")
+    loss_plot_path = os.path.join(results_dir, "unified_loss_curves.png")
+    qual_plot_path = os.path.join(results_dir, "unified_qualitative_results.png")
+    comparison_path = os.path.join(results_dir, "unified_comparison_table.csv")
 
     train_losses, val_losses = [], []
     train_psnrs, val_psnrs = [], []
