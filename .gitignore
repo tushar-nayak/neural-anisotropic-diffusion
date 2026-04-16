@@ -1,6 +1,6 @@
 *.pth
 *.DS_Store
-*.md
+
 
 # Local datasets and KaggleHub cache.
 brain_tumor_dataset/
