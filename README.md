@@ -2,6 +2,87 @@
 
 This repository contains a unified, working version of a learned Perona-Malik style image denoiser for brain MRI slices. The model unrolls a PDE-style diffusion process and predicts spatially varying conduction weights with a neural network so it can smooth noise while trying to preserve edges.
 
+## Project Summary
+
+Medical image denoising is not just a smoothing problem. In brain MRI, useful denoising should suppress noise while preserving anatomical boundaries, lesion margins, and tissue structure. Classical filters such as Gaussian smoothing can improve visual smoothness, but they often blur the same edges that matter downstream.
+
+This project explores a learned anisotropic diffusion model for MRI denoising. The model keeps the structure of a Perona-Malik style diffusion process, but replaces the fixed hand-designed conduction function with learned spatially varying conduction weights. The result is a hybrid model: it has the inductive bias of a PDE-based denoiser while still learning from data.
+
+The current extended branch includes:
+
+- a unified PyTorch training and evaluation script
+- 4-neighbor and 8-neighbor diffusion modes
+- optional MiniUNet guidance features
+- optional residual refinement
+- classical and neural comparison baselines
+- edge-preservation metrics
+- eval-only, noise-sweep, ablation, and config-driven experiment modes
+
+## Method
+
+The model starts from a noisy MRI slice and repeatedly applies a learned diffusion update. At each unrolled step, local image gradients are computed across either 4 or 8 neighboring directions. A small neural conduction network predicts how much diffusion should happen along each direction, using both local gradients and optional guidance features.
+
+The training objective combines:
+
+- SSIM loss for structural similarity
+- L1 loss for pixel-level fidelity
+- gradient loss for edge preservation
+
+The default loss is:
+
+```text
+SSIM + L1 + 0.1 * gradient_loss
+```
+
+This is intended to reward denoising without fully washing out anatomical detail.
+
+## Dataset And Evaluation
+
+The experiments use the Br35H brain tumor MRI dataset downloaded into the local `brain_tumor_dataset/` directory. The labels in the dataset are used only for stratified splitting and qualitative grouping. This project treats the images as a denoising benchmark, not as a tumor classifier.
+
+The committed extended result uses:
+
+- `3000` total images
+- `2100 / 450 / 450` train, validation, and test split
+- Rician-style synthetic corruption during training
+- held-out test evaluation against classical denoisers
+- PSNR and SSIM as image-quality metrics
+
+The latest extended comparison is saved in [`results_extended/unified_comparison_table.csv`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/results_extended/unified_comparison_table.csv).
+
+## Results
+
+The extended run produced the following held-out test results:
+
+| Method | PSNR (dB) | SSIM |
+| --- | ---: | ---: |
+| Noisy Input | 17.727 | 0.426 |
+| Gaussian Smoothing | 18.968 | 0.549 |
+| Median Filter | 19.502 | 0.519 |
+| Bilateral Filter | 18.952 | 0.461 |
+| Non-Local Means | 20.376 | 0.583 |
+| Wavelet Denoising | 19.523 | 0.529 |
+| Skimage TV | 19.457 | 0.568 |
+| Curvature Flow (16 iter) | 19.957 | 0.557 |
+| Classical PM (16 iter) | 19.610 | 0.535 |
+| Unified Neural PDE (Ours) | 24.932 | 0.722 |
+
+The learned diffusion model is the strongest method in this comparison. Relative to the best classical baseline in this table, Non-Local Means, the unified neural PDE improves:
+
+| Comparison | PSNR Gain | SSIM Gain |
+| --- | ---: | ---: |
+| Ours vs Non-Local Means | +4.556 dB | +0.139 |
+
+This result supports the main project claim: a learned diffusion process can outperform standard hand-designed denoisers on this MRI denoising setup while retaining the interpretability of iterative diffusion.
+
+## Outputs And Figures
+
+The extended result artifacts are committed in [`results_extended/`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/results_extended):
+
+- [`unified_comparison_table.csv`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/results_extended/unified_comparison_table.csv): quantitative comparison table
+- [`unified_loss_curves.png`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/results_extended/unified_loss_curves.png): training and validation curves
+- [`unified_qualitative_results.png`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/results_extended/unified_qualitative_results.png): qualitative denoising examples
+
 ## What the unified script does
 
 - Loads grayscale MRI slices from the local Br35H Kaggle download in [`brain_tumor_dataset/`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/brain_tumor_dataset).
