@@ -5,6 +5,7 @@
 import argparse
 import os
 import glob
+import json
 import warnings
 
 import matplotlib
@@ -22,7 +23,7 @@ import torchvision.transforms as transforms
 from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset, DataLoader, Subset
 
-from scipy.ndimage import gaussian_filter, median_filter
+from scipy.ndimage import gaussian_filter, median_filter, sobel
 from skimage.restoration import (
     denoise_bilateral,
     denoise_nl_means,
@@ -207,6 +208,47 @@ class UnifiedNeuralPeronaMalik(nn.Module):
         return x
 
 
+class UNetDenoiser(nn.Module):
+    """Plain neural denoiser baseline trained on the same noisy/clean pairs."""
+
+    def __init__(self):
+        super().__init__()
+        self.enc1 = nn.Sequential(
+            nn.Conv2d(1, 32, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(32, 32, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+        )
+        self.enc2 = nn.Sequential(
+            nn.Conv2d(32, 64, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(64, 64, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+        )
+        self.bottleneck = nn.Sequential(
+            nn.Conv2d(64, 128, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(128, 64, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+        )
+        self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
+        self.dec1 = nn.Sequential(
+            nn.Conv2d(128, 64, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(64, 32, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+        )
+        self.out = nn.Conv2d(64, 1, kernel_size=1)
+        self.pool = nn.MaxPool2d(2)
+
+    def forward(self, x):
+        e1 = self.enc1(x)
+        e2 = self.enc2(self.pool(e1))
+        b = self.bottleneck(self.pool(e2))
+        d1 = self.dec1(torch.cat([self.up(b), e2], dim=1))
+        return x + self.out(torch.cat([self.up(d1), e1], dim=1))
+
+
 def gradient_loss(pred, target):
     dx_pred = pred[:, :, :, 1:] - pred[:, :, :, :-1]
     dx_tgt = target[:, :, :, 1:] - target[:, :, :, :-1]
@@ -218,6 +260,19 @@ def gradient_loss(pred, target):
 def psnr_metric(pred, target):
     mse = F.mse_loss(pred, target)
     return 10 * torch.log10(1.0 / (mse + 1e-8))
+
+
+def edge_mse_np(clean, denoised):
+    clean_edges = np.hypot(sobel(clean, axis=0), sobel(clean, axis=1))
+    denoised_edges = np.hypot(sobel(denoised, axis=0), sobel(denoised, axis=1))
+    return float(np.mean((clean_edges - denoised_edges) ** 2))
+
+
+def edge_mse_torch(pred, target):
+    scores = []
+    for pred_img, target_img in zip(pred.detach().cpu(), target.detach().cpu()):
+        scores.append(edge_mse_np(target_img.squeeze().numpy(), pred_img.squeeze().numpy()))
+    return scores
 
 
 def combined_loss(output, clean, l1_fn, grad_weight=0.1):
@@ -374,9 +429,17 @@ def get_device():
     return torch.device("cpu")
 
 
+def set_seed(seed):
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
 def evaluate_model(model, loader, device):
     psnrs = []
     ssims = []
+    edge_mses = []
     examples = {0: [], 1: []}
 
     model.eval()
@@ -390,12 +453,13 @@ def evaluate_model(model, loader, device):
             s = ssim(out, clean, data_range=1.0).item()
             psnrs.append(p)
             ssims.append(s)
+            edge_mses.extend(edge_mse_torch(out, clean))
 
             lv = label.item()
             if len(examples[lv]) < 2:
                 examples[lv].append((clean.cpu(), noisy.cpu(), out.cpu(), s, p))
 
-    return psnrs, ssims, examples
+    return psnrs, ssims, edge_mses, examples
 
 
 def save_loss_plot(train_losses, val_losses, train_psnrs, val_psnrs, path):
@@ -445,38 +509,60 @@ def save_qualitative_plot(examples, path):
     plt.close()
 
 
-def save_comparison_table(test_batches, model_psnrs, model_ssims, path, neighbor_mode):
-    res = {
-        "Noisy Input": {"psnr": [], "ssim": []},
-        "Gaussian": {"psnr": [], "ssim": []},
-        "Median": {"psnr": [], "ssim": []},
-        "Bilateral": {"psnr": [], "ssim": []},
-        "Non-Local Means": {"psnr": [], "ssim": []},
-        "Wavelet": {"psnr": [], "ssim": []},
-        "Classic PM": {"psnr": [], "ssim": []},
-        "Curvature Flow": {"psnr": [], "ssim": []},
-        "Skimage TV": {"psnr": [], "ssim": []},
+def metric_summary(method, psnrs, ssims, edge_mses):
+    return {
+        "Method": method,
+        "PSNR (dB)": np.mean(psnrs),
+        "PSNR Std": np.std(psnrs),
+        "SSIM": np.mean(ssims),
+        "SSIM Std": np.std(ssims),
+        "Edge MSE": np.mean(edge_mses),
+        "Edge MSE Std": np.std(edge_mses),
     }
+
+
+def record_numpy_metrics(res, key, clean, output):
+    res[key]["psnr"].append(skimage_psnr(clean, output, data_range=1.0))
+    res[key]["ssim"].append(skimage_ssim(clean, output, data_range=1.0))
+    res[key]["edge_mse"].append(edge_mse_np(clean, output))
+
+
+def run_classical_baselines(test_batches, neighbor_mode, capture_examples=2):
+    res = {}
+    methods = [
+        "Noisy Input",
+        "Gaussian Smoothing",
+        "Median Filter",
+        "Bilateral Filter",
+        "Non-Local Means",
+        "Wavelet Denoising",
+        "Skimage TV",
+        "Curvature Flow",
+        "Classical PM",
+    ]
+    for method in methods:
+        res[method] = {"psnr": [], "ssim": [], "edge_mse": []}
 
     pm_iterations = 16 if neighbor_mode == 8 else 8
     pm_gamma = 0.05 if neighbor_mode == 8 else 0.1
     curvature_iterations = pm_iterations
     curvature_gamma = pm_gamma
+    examples = []
 
     for noisy, clean, _ in test_batches:
         n_img = noisy.squeeze().cpu().numpy()
         c_img = clean.squeeze().cpu().numpy()
+        outputs = {"Clean": c_img, "Noisy Input": n_img}
 
-        res["Noisy Input"]["psnr"].append(skimage_psnr(c_img, n_img, data_range=1.0))
-        res["Noisy Input"]["ssim"].append(skimage_ssim(c_img, n_img, data_range=1.0))
+        record_numpy_metrics(res, "Noisy Input", c_img, n_img)
 
         g_out = gaussian_filter(n_img, sigma=1.0)
-        res["Gaussian"]["psnr"].append(skimage_psnr(c_img, g_out, data_range=1.0))
-        res["Gaussian"]["ssim"].append(skimage_ssim(c_img, g_out, data_range=1.0))
+        outputs["Gaussian Smoothing"] = g_out
+        record_numpy_metrics(res, "Gaussian Smoothing", c_img, g_out)
 
         median_out = median_filter(n_img, size=3)
-        res["Median"]["psnr"].append(skimage_psnr(c_img, median_out, data_range=1.0))
-        res["Median"]["ssim"].append(skimage_ssim(c_img, median_out, data_range=1.0))
+        outputs["Median Filter"] = median_out
+        record_numpy_metrics(res, "Median Filter", c_img, median_out)
 
         bilateral_out = denoise_bilateral(
             n_img,
@@ -485,8 +571,8 @@ def save_comparison_table(test_batches, model_psnrs, model_ssims, path, neighbor
             channel_axis=None,
         )
         bilateral_out = np.clip(bilateral_out, 0.0, 1.0)
-        res["Bilateral"]["psnr"].append(skimage_psnr(c_img, bilateral_out, data_range=1.0))
-        res["Bilateral"]["ssim"].append(skimage_ssim(c_img, bilateral_out, data_range=1.0))
+        outputs["Bilateral Filter"] = bilateral_out
+        record_numpy_metrics(res, "Bilateral Filter", c_img, bilateral_out)
 
         sigma_est = estimate_noise_sigma(n_img)
         nlm_out = denoise_nl_means(
@@ -499,8 +585,8 @@ def save_comparison_table(test_batches, model_psnrs, model_ssims, path, neighbor
             channel_axis=None,
         )
         nlm_out = np.clip(nlm_out, 0.0, 1.0)
-        res["Non-Local Means"]["psnr"].append(skimage_psnr(c_img, nlm_out, data_range=1.0))
-        res["Non-Local Means"]["ssim"].append(skimage_ssim(c_img, nlm_out, data_range=1.0))
+        outputs["Non-Local Means"] = nlm_out
+        record_numpy_metrics(res, "Non-Local Means", c_img, nlm_out)
 
         wavelet_out = denoise_wavelet(
             n_img,
@@ -511,86 +597,83 @@ def save_comparison_table(test_batches, model_psnrs, model_ssims, path, neighbor
             channel_axis=None,
         )
         wavelet_out = np.clip(wavelet_out, 0.0, 1.0)
-        res["Wavelet"]["psnr"].append(skimage_psnr(c_img, wavelet_out, data_range=1.0))
-        res["Wavelet"]["ssim"].append(skimage_ssim(c_img, wavelet_out, data_range=1.0))
+        outputs["Wavelet Denoising"] = wavelet_out
+        record_numpy_metrics(res, "Wavelet Denoising", c_img, wavelet_out)
 
         pm_out = classical_perona_malik(
             n_img, iterations=pm_iterations, kappa=0.1, gamma=pm_gamma
         )
-        res["Classic PM"]["psnr"].append(skimage_psnr(c_img, pm_out, data_range=1.0))
-        res["Classic PM"]["ssim"].append(skimage_ssim(c_img, pm_out, data_range=1.0))
+        pm_name = f"Classical PM ({pm_iterations} iter)"
+        outputs[pm_name] = pm_out
+        res[pm_name] = res.pop("Classical PM") if "Classical PM" in res else res[pm_name]
+        record_numpy_metrics(res, pm_name, c_img, pm_out)
 
         curvature_out = curvature_flow(
             n_img, iterations=curvature_iterations, gamma=curvature_gamma
         )
-        res["Curvature Flow"]["psnr"].append(
-            skimage_psnr(c_img, curvature_out, data_range=1.0)
-        )
-        res["Curvature Flow"]["ssim"].append(
-            skimage_ssim(c_img, curvature_out, data_range=1.0)
-        )
+        curvature_name = f"Curvature Flow ({curvature_iterations} iter)"
+        outputs[curvature_name] = curvature_out
+        res[curvature_name] = res.pop("Curvature Flow") if "Curvature Flow" in res else res[curvature_name]
+        record_numpy_metrics(res, curvature_name, c_img, curvature_out)
 
         tv_out = denoise_tv_chambolle(n_img, weight=0.1)
-        res["Skimage TV"]["psnr"].append(skimage_psnr(c_img, tv_out, data_range=1.0))
-        res["Skimage TV"]["ssim"].append(skimage_ssim(c_img, tv_out, data_range=1.0))
+        outputs["Skimage TV"] = tv_out
+        record_numpy_metrics(res, "Skimage TV", c_img, tv_out)
 
-    baseline_results = {
-        k: (np.mean(v["psnr"]), np.mean(v["ssim"])) for k, v in res.items()
-    }
+        if len(examples) < capture_examples:
+            examples.append(outputs)
 
-    method_name = "Unified Neural PDE (Ours)"
-    results_data = [
-        {
-            "Method": "Noisy Input",
-            "PSNR (dB)": baseline_results["Noisy Input"][0],
-            "SSIM": baseline_results["Noisy Input"][1],
-        },
-        {
-            "Method": "Gaussian Smoothing",
-            "PSNR (dB)": baseline_results["Gaussian"][0],
-            "SSIM": baseline_results["Gaussian"][1],
-        },
-        {
-            "Method": "Median Filter",
-            "PSNR (dB)": baseline_results["Median"][0],
-            "SSIM": baseline_results["Median"][1],
-        },
-        {
-            "Method": "Bilateral Filter",
-            "PSNR (dB)": baseline_results["Bilateral"][0],
-            "SSIM": baseline_results["Bilateral"][1],
-        },
-        {
-            "Method": "Non-Local Means",
-            "PSNR (dB)": baseline_results["Non-Local Means"][0],
-            "SSIM": baseline_results["Non-Local Means"][1],
-        },
-        {
-            "Method": "Wavelet Denoising",
-            "PSNR (dB)": baseline_results["Wavelet"][0],
-            "SSIM": baseline_results["Wavelet"][1],
-        },
-        {
-            "Method": "Skimage TV",
-            "PSNR (dB)": baseline_results["Skimage TV"][0],
-            "SSIM": baseline_results["Skimage TV"][1],
-        },
-        {
-            "Method": f"Curvature Flow ({curvature_iterations} iter)",
-            "PSNR (dB)": baseline_results["Curvature Flow"][0],
-            "SSIM": baseline_results["Curvature Flow"][1],
-        },
-        {
-            "Method": f"Classical PM ({pm_iterations} iter)",
-            "PSNR (dB)": baseline_results["Classic PM"][0],
-            "SSIM": baseline_results["Classic PM"][1],
-        },
-        {
-            "Method": method_name,
-            "PSNR (dB)": np.mean(model_psnrs),
-            "SSIM": np.mean(model_ssims),
-        },
+    order = [
+        "Noisy Input",
+        "Gaussian Smoothing",
+        "Median Filter",
+        "Bilateral Filter",
+        "Non-Local Means",
+        "Wavelet Denoising",
+        "Skimage TV",
+        curvature_name,
+        pm_name,
     ]
+    rows = [metric_summary(name, res[name]["psnr"], res[name]["ssim"], res[name]["edge_mse"]) for name in order]
+    return rows, examples
+
+
+def save_comparison_grid(examples, path, model_outputs=None, max_cols=6):
+    if not examples:
+        return
+
+    rows = []
+    for idx, outputs in enumerate(examples):
+        row = dict(outputs)
+        if model_outputs and idx < len(model_outputs):
+            row.update(model_outputs[idx])
+        rows.append(row)
+
+    method_names = list(rows[0].keys())[:max_cols]
+    fig, axes = plt.subplots(len(rows), len(method_names), figsize=(3 * len(method_names), 3 * len(rows)))
+    axes = np.atleast_2d(axes)
+    for row_idx, outputs in enumerate(rows):
+        for col_idx, name in enumerate(method_names):
+            axes[row_idx, col_idx].imshow(outputs[name], cmap="gray", vmin=0, vmax=1)
+            axes[row_idx, col_idx].set_title(name)
+            axes[row_idx, col_idx].axis("off")
+
+    plt.tight_layout()
+    plt.savefig(path, dpi=150)
+    plt.close()
+
+
+def save_comparison_table(test_batches, model_psnrs, model_ssims, model_edge_mses, path, neighbor_mode, extra_rows=None):
+    results_data, baseline_examples = run_classical_baselines(test_batches, neighbor_mode)
+    results_data.extend(extra_rows or [])
+    results_data.append(
+        metric_summary(
+            "Unified Neural PDE (Ours)",
+            model_psnrs,
+            model_ssims,
+            model_edge_mses,
+        )
+    )
 
     df = pd.DataFrame(results_data).round(3)
     print("\n=======================================================")
@@ -599,87 +682,31 @@ def save_comparison_table(test_batches, model_psnrs, model_ssims, path, neighbor
     print(df.to_markdown(index=False))
     df.to_csv(path, index=False)
     print(f"\nSaved: {path}")
+    return df, baseline_examples
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Unified Neural Anisotropic Diffusion")
-    parser.add_argument("--neighbor-mode", type=int, default=8, choices=[4, 8])
-    parser.add_argument("--noise-type", type=str, default="rician", choices=["gaussian", "rician", "speckle", "mixed"])
-    parser.add_argument("--iterations", type=int, default=None)
-    parser.add_argument("--lambda-param", type=float, default=None)
-    parser.add_argument("--epochs", type=int, default=300)
-    parser.add_argument("--batch-size", type=int, default=8)
-    parser.add_argument("--image-size", type=int, default=128)
-    parser.add_argument("--grad-weight", type=float, default=0.1)
-    parser.add_argument("--results-dir", type=str, default=RESULTS_DIR)
-    parser.add_argument("--checkpoint-dir", type=str, default=CHECKPOINT_DIR)
-    parser.add_argument("--no-refinement", action="store_true")
-    parser.add_argument("--no-unet-guidance", action="store_true")
-    return parser.parse_args()
-
-
-def main():
-    args = parse_args()
-    device = get_device()
-    print(f"Running on: {device}")
-    if torch.cuda.is_available():
-        print(f"GPU: {torch.cuda.get_device_name(0)}")
-
-    iterations = args.iterations if args.iterations is not None else (16 if args.neighbor_mode == 8 else 10)
-    lambda_param = args.lambda_param if args.lambda_param is not None else (0.05 if args.neighbor_mode == 8 else 0.1)
-
-    dataset = MRIDenoisingDataset(
-        DATASET_PATH,
-        image_size=args.image_size,
-        noise_type=args.noise_type,
-    )
-
-    if len(dataset) == 0:
-        raise RuntimeError(f"No images found at: {DATASET_PATH}")
-
-    train_set, val_set, test_set, train_loader, val_loader, test_loader = build_dataloaders(
-        dataset, batch_size=args.batch_size, num_workers=0
-    )
-    print(
-        f"Dataset split - Train: {len(train_set)} | Val: {len(val_set)} | Test: {len(test_set)}"
-    )
-
-    checkpoint_dir = resolve_repo_path(args.checkpoint_dir)
-    results_dir = resolve_repo_path(args.results_dir)
-    os.makedirs(checkpoint_dir, exist_ok=True)
-    os.makedirs(results_dir, exist_ok=True)
-
-    model = UnifiedNeuralPeronaMalik(
-        iterations=iterations,
-        lambda_param=lambda_param,
-        neighbor_mode=args.neighbor_mode,
-        use_refinement=not args.no_refinement,
-        use_unet_guidance=not args.no_unet_guidance,
-    ).to(device)
-
-    optimizer = torch.optim.Adam(
-        [
-            {"params": model.guidance_encoder.parameters(), "lr": 1e-4},
-            {"params": model.conduction_net.parameters(), "lr": 1e-3},
-            {"params": model.refinement_net.parameters(), "lr": 1e-3},
-        ]
-    )
+def train_model(model, train_loader, val_loader, device, epochs, grad_weight, checkpoint_path, lr=1e-3):
+    if isinstance(model, UnifiedNeuralPeronaMalik):
+        optimizer = torch.optim.Adam(
+            [
+                {"params": model.guidance_encoder.parameters(), "lr": 1e-4},
+                {"params": model.conduction_net.parameters(), "lr": 1e-3},
+                {"params": model.refinement_net.parameters(), "lr": 1e-3},
+            ]
+        )
+    else:
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     l1_criterion = nn.L1Loss()
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=args.epochs, eta_min=1e-5
+        optimizer, T_max=max(epochs, 1), eta_min=1e-5
     )
-
-    best_model_path = os.path.join(checkpoint_dir, "unified_model.pth")
-    loss_plot_path = os.path.join(results_dir, "unified_loss_curves.png")
-    qual_plot_path = os.path.join(results_dir, "unified_qualitative_results.png")
-    comparison_path = os.path.join(results_dir, "unified_comparison_table.csv")
 
     train_losses, val_losses = [], []
     train_psnrs, val_psnrs = [], []
     best_val_loss = float("inf")
 
     print("Starting training...")
-    for epoch in range(args.epochs):
+    for epoch in range(epochs):
         model.train()
         epoch_train_loss = 0.0
         epoch_train_psnr = 0.0
@@ -690,7 +717,7 @@ def main():
 
             optimizer.zero_grad()
             output = torch.clamp(model(noisy), 0.0, 1.0)
-            loss = combined_loss(output, clean, l1_criterion, grad_weight=args.grad_weight)
+            loss = combined_loss(output, clean, l1_criterion, grad_weight=grad_weight)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
@@ -706,7 +733,7 @@ def main():
                 noisy = noisy.to(device)
                 clean = clean.to(device)
                 output = torch.clamp(model(noisy), 0.0, 1.0)
-                epoch_val_loss += combined_loss(output, clean, l1_criterion, grad_weight=args.grad_weight).item()
+                epoch_val_loss += combined_loss(output, clean, l1_criterion, grad_weight=grad_weight).item()
                 epoch_val_psnr += psnr_metric(output, clean).item()
 
         scheduler.step()
@@ -723,30 +750,294 @@ def main():
 
         if avg_val < best_val_loss:
             best_val_loss = avg_val
-            torch.save(model.state_dict(), best_model_path)
+            torch.save(model.state_dict(), checkpoint_path)
 
         if (epoch + 1) % 10 == 0 or epoch == 0:
             print(
-                f"Epoch [{epoch + 1:>3}/{args.epochs}] "
+                f"Epoch [{epoch + 1:>3}/{epochs}] "
                 f"Train Loss: {avg_train:.4f} | Val Loss: {avg_val:.4f} | "
                 f"Train PSNR: {avg_train_psnr:.2f} dB | Val PSNR: {avg_val_psnr:.2f} dB | "
                 f"LR: {scheduler.get_last_lr()[0]:.2e}"
             )
 
-    print(f"\nTraining complete. Best val loss: {best_val_loss:.4f}")
+    return best_val_loss, train_losses, val_losses, train_psnrs, val_psnrs
 
-    save_loss_plot(train_losses, val_losses, train_psnrs, val_psnrs, loss_plot_path)
-    print(f"Saved: {loss_plot_path}")
+
+def collect_model_examples(model, test_batches, device, max_examples=2, name="Unified Neural PDE (Ours)"):
+    examples = []
+    model.eval()
+    with torch.no_grad():
+        for noisy, _, _ in test_batches[:max_examples]:
+            out = torch.clamp(model(noisy.to(device)), 0.0, 1.0)
+            examples.append({name: out.squeeze().cpu().numpy()})
+    return examples
+
+
+def evaluate_neural_baseline(train_loader, val_loader, test_batches, device, epochs, grad_weight, checkpoint_path):
+    baseline = UNetDenoiser().to(device)
+    best_val, _, _, _, _ = train_model(
+        baseline,
+        train_loader,
+        val_loader,
+        device,
+        epochs,
+        grad_weight,
+        checkpoint_path,
+        lr=1e-3,
+    )
+    baseline.load_state_dict(torch.load(checkpoint_path, map_location=device))
+    psnrs, ssims, edge_mses, _ = evaluate_model(baseline, test_batches, device)
+    print(f"U-Net baseline best val loss: {best_val:.4f}")
+    return metric_summary("Plain U-Net Baseline", psnrs, ssims, edge_mses), baseline
+
+
+def run_noise_sweep(model, dataset_path, args, device, path):
+    rows = []
+    sweep_types = [x.strip() for x in args.noise_sweep_types.split(",") if x.strip()]
+    sweep_sigmas = [float(x.strip()) for x in args.noise_sweep_sigmas.split(",") if x.strip()]
+
+    for noise_type in sweep_types:
+        for sigma in sweep_sigmas:
+            set_seed(args.seed)
+            dataset = MRIDenoisingDataset(
+                dataset_path,
+                image_size=args.image_size,
+                noise_type=noise_type,
+                sigma_range=(sigma, sigma),
+            )
+            _, _, _, _, _, test_loader = build_dataloaders(
+                dataset, batch_size=args.batch_size, seed=args.seed, num_workers=0
+            )
+            psnrs, ssims, edge_mses, _ = evaluate_model(model, list(test_loader), device)
+            row = metric_summary("Unified Neural PDE (Ours)", psnrs, ssims, edge_mses)
+            row["Noise Type"] = noise_type
+            row["Sigma"] = sigma
+            rows.append(row)
+
+    df = pd.DataFrame(rows).round(3)
+    df.to_csv(path, index=False)
+    print(f"Saved: {path}")
+    return df
+
+
+def make_unified_model(args, neighbor_mode=None, use_refinement=None, use_unet_guidance=None):
+    mode = args.neighbor_mode if neighbor_mode is None else neighbor_mode
+    iterations = args.iterations if args.iterations is not None else (16 if mode == 8 else 10)
+    lambda_param = args.lambda_param if args.lambda_param is not None else (0.05 if mode == 8 else 0.1)
+    return UnifiedNeuralPeronaMalik(
+        iterations=iterations,
+        lambda_param=lambda_param,
+        neighbor_mode=mode,
+        use_refinement=not args.no_refinement if use_refinement is None else use_refinement,
+        use_unet_guidance=not args.no_unet_guidance if use_unet_guidance is None else use_unet_guidance,
+    )
+
+
+def run_ablation_suite(train_loader, val_loader, test_batches, args, device, checkpoint_dir, path):
+    configs = [
+        ("Full Model", args.neighbor_mode, True, True),
+        ("No MiniUNet Guidance", args.neighbor_mode, True, False),
+        ("No Residual Refinement", args.neighbor_mode, False, True),
+        ("4-Neighbor Diffusion", 4, True, True),
+    ]
+    rows = []
+
+    for name, neighbor_mode, use_refinement, use_unet_guidance in configs:
+        print(f"\nRunning ablation: {name}")
+        model = make_unified_model(
+            args,
+            neighbor_mode=neighbor_mode,
+            use_refinement=use_refinement,
+            use_unet_guidance=use_unet_guidance,
+        ).to(device)
+        checkpoint_path = os.path.join(
+            checkpoint_dir,
+            f"ablation_{name.lower().replace(' ', '_').replace('-', '_')}.pth",
+        )
+        best_val, _, _, _, _ = train_model(
+            model,
+            train_loader,
+            val_loader,
+            device,
+            args.ablation_epochs,
+            args.grad_weight,
+            checkpoint_path,
+        )
+        model.load_state_dict(torch.load(checkpoint_path, map_location=device))
+        psnrs, ssims, edge_mses, _ = evaluate_model(model, test_batches, device)
+        row = metric_summary(name, psnrs, ssims, edge_mses)
+        row["Best Val Loss"] = best_val
+        row["Neighbor Mode"] = neighbor_mode
+        row["Refinement"] = use_refinement
+        row["MiniUNet Guidance"] = use_unet_guidance
+        rows.append(row)
+
+    df = pd.DataFrame(rows).round(3)
+    df.to_csv(path, index=False)
+    print(f"Saved: {path}")
+    return df
+
+
+def apply_json_config(args):
+    if not args.config:
+        return args
+    config_path = resolve_repo_path(args.config)
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = json.load(f)
+    for key, value in config.items():
+        attr = key.replace("-", "_")
+        if hasattr(args, attr):
+            setattr(args, attr, value)
+    return args
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Unified Neural Anisotropic Diffusion")
+    parser.add_argument("--config", type=str, default=None, help="Optional JSON config file with argument names as keys.")
+    parser.add_argument("--neighbor-mode", type=int, default=8, choices=[4, 8])
+    parser.add_argument("--noise-type", type=str, default="rician", choices=["gaussian", "rician", "speckle", "mixed"])
+    parser.add_argument("--sigma-min", type=float, default=0.05)
+    parser.add_argument("--sigma-max", type=float, default=0.20)
+    parser.add_argument("--iterations", type=int, default=None)
+    parser.add_argument("--lambda-param", type=float, default=None)
+    parser.add_argument("--epochs", type=int, default=300)
+    parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--image-size", type=int, default=128)
+    parser.add_argument("--grad-weight", type=float, default=0.1)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--results-dir", type=str, default=RESULTS_DIR)
+    parser.add_argument("--checkpoint-dir", type=str, default=CHECKPOINT_DIR)
+    parser.add_argument("--checkpoint", type=str, default=None, help="Checkpoint path for eval-only or explicit loading.")
+    parser.add_argument("--eval-only", action="store_true", help="Skip training and evaluate a saved checkpoint.")
+    parser.add_argument("--train-unet-baseline-epochs", type=int, default=0, help="Train and include a plain U-Net denoiser baseline.")
+    parser.add_argument("--noise-sweep", action="store_true", help="Evaluate the saved/trained model across fixed noise levels.")
+    parser.add_argument("--noise-sweep-types", type=str, default="gaussian,rician,speckle,mixed")
+    parser.add_argument("--noise-sweep-sigmas", type=str, default="0.05,0.10,0.15,0.20")
+    parser.add_argument("--run-ablation-suite", action="store_true", help="Train and evaluate common architecture ablations.")
+    parser.add_argument("--ablation-epochs", type=int, default=20)
+    parser.add_argument("--no-refinement", action="store_true")
+    parser.add_argument("--no-unet-guidance", action="store_true")
+    return apply_json_config(parser.parse_args())
+
+
+def main():
+    args = parse_args()
+    set_seed(args.seed)
+    device = get_device()
+    print(f"Running on: {device}")
+    if torch.cuda.is_available():
+        print(f"GPU: {torch.cuda.get_device_name(0)}")
+
+    dataset = MRIDenoisingDataset(
+        DATASET_PATH,
+        image_size=args.image_size,
+        noise_type=args.noise_type,
+        sigma_range=(args.sigma_min, args.sigma_max),
+    )
+
+    if len(dataset) == 0:
+        raise RuntimeError(f"No images found at: {DATASET_PATH}")
+
+    train_set, val_set, test_set, train_loader, val_loader, test_loader = build_dataloaders(
+        dataset, batch_size=args.batch_size, seed=args.seed, num_workers=0
+    )
+    print(
+        f"Dataset split - Train: {len(train_set)} | Val: {len(val_set)} | Test: {len(test_set)}"
+    )
+
+    checkpoint_dir = resolve_repo_path(args.checkpoint_dir)
+    results_dir = resolve_repo_path(args.results_dir)
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    os.makedirs(results_dir, exist_ok=True)
+
+    model = make_unified_model(args).to(device)
+
+    best_model_path = os.path.join(checkpoint_dir, "unified_model.pth")
+    if args.checkpoint:
+        best_model_path = resolve_repo_path(args.checkpoint)
+    loss_plot_path = os.path.join(results_dir, "unified_loss_curves.png")
+    qual_plot_path = os.path.join(results_dir, "unified_qualitative_results.png")
+    comparison_grid_path = os.path.join(results_dir, "unified_full_comparison_grid.png")
+    comparison_path = os.path.join(results_dir, "unified_comparison_table.csv")
+
+    if args.eval_only:
+        if not os.path.exists(best_model_path):
+            raise FileNotFoundError(f"Checkpoint not found for --eval-only: {best_model_path}")
+        print(f"Skipping training. Loading checkpoint: {best_model_path}")
+    else:
+        best_val_loss, train_losses, val_losses, train_psnrs, val_psnrs = train_model(
+            model,
+            train_loader,
+            val_loader,
+            device,
+            args.epochs,
+            args.grad_weight,
+            best_model_path,
+        )
+        print(f"\nTraining complete. Best val loss: {best_val_loss:.4f}")
+        save_loss_plot(train_losses, val_losses, train_psnrs, val_psnrs, loss_plot_path)
+        print(f"Saved: {loss_plot_path}")
 
     model.load_state_dict(torch.load(best_model_path, map_location=device))
     model.eval()
 
     test_batches = list(test_loader)
-    model_psnrs, model_ssims, examples = evaluate_model(model, test_batches, device)
+    model_psnrs, model_ssims, model_edge_mses, examples = evaluate_model(model, test_batches, device)
     save_qualitative_plot(examples, qual_plot_path)
     print(f"Saved: {qual_plot_path}")
 
-    save_comparison_table(test_batches, model_psnrs, model_ssims, comparison_path, args.neighbor_mode)
+    extra_rows = []
+    extra_models = []
+    if args.train_unet_baseline_epochs > 0:
+        unet_checkpoint_path = os.path.join(checkpoint_dir, "unet_baseline.pth")
+        print(f"\nTraining plain U-Net baseline for {args.train_unet_baseline_epochs} epochs...")
+        unet_row, unet_model = evaluate_neural_baseline(
+            train_loader,
+            val_loader,
+            test_batches,
+            device,
+            args.train_unet_baseline_epochs,
+            args.grad_weight,
+            unet_checkpoint_path,
+        )
+        extra_rows.append(unet_row)
+        extra_models = collect_model_examples(unet_model, test_batches, device, name="Plain U-Net Baseline")
+
+    _, baseline_examples = save_comparison_table(
+        test_batches,
+        model_psnrs,
+        model_ssims,
+        model_edge_mses,
+        comparison_path,
+        args.neighbor_mode,
+        extra_rows=extra_rows,
+    )
+
+    model_examples = collect_model_examples(model, test_batches, device)
+    merged_model_examples = []
+    for idx, model_example in enumerate(model_examples):
+        merged = dict(model_example)
+        if idx < len(extra_models):
+            merged.update(extra_models[idx])
+        merged_model_examples.append(merged)
+    save_comparison_grid(baseline_examples, comparison_grid_path, merged_model_examples, max_cols=12)
+    print(f"Saved: {comparison_grid_path}")
+
+    if args.noise_sweep:
+        sweep_path = os.path.join(results_dir, "unified_noise_sweep.csv")
+        run_noise_sweep(model, DATASET_PATH, args, device, sweep_path)
+
+    if args.run_ablation_suite:
+        ablation_path = os.path.join(results_dir, "unified_ablation_suite.csv")
+        run_ablation_suite(
+            train_loader,
+            val_loader,
+            test_batches,
+            args,
+            device,
+            checkpoint_dir,
+            ablation_path,
+        )
 
 
 if __name__ == "__main__":

@@ -1,0 +1,15 @@
+{
+  "epochs": 300,
+  "batch_size": 8,
+  "neighbor_mode": 8,
+  "noise_type": "rician",
+  "sigma_min": 0.05,
+  "sigma_max": 0.2,
+  "results_dir": "results_config_run",
+  "checkpoint_dir": "checkpoints_config_run",
+  "noise_sweep": true,
+  "noise_sweep_types": "gaussian,rician,speckle,mixed",
+  "noise_sweep_sigmas": "0.05,0.10,0.15,0.20",
+  "run_ablation_suite": false,
+  "ablation_epochs": 20
+}

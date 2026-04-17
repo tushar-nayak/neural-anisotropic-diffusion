@@ -70,6 +70,11 @@ python main.py --noise-type rician
 python main.py --iterations 16 --lambda-param 0.05
 python main.py --epochs 300 --batch-size 8
 python main.py --epochs 300 --results-dir results_300epochs --checkpoint-dir checkpoints_300epochs
+python main.py --eval-only --checkpoint checkpoints_extended/unified_model.pth --results-dir results_eval
+python main.py --noise-sweep --noise-sweep-types gaussian,rician,speckle --noise-sweep-sigmas 0.05,0.10,0.15,0.20
+python main.py --train-unet-baseline-epochs 50
+python main.py --run-ablation-suite --ablation-epochs 20
+python main.py --config configs/example.json
 python main.py --no-refinement
 python main.py --no-unet-guidance
 ```
@@ -102,7 +107,20 @@ The unified script writes these files locally when you run it:
 - `results/unified_loss_curves.png`
 - `results/unified_qualitative_results.png`
 - `results/unified_comparison_table.csv`
+- `results/unified_full_comparison_grid.png`
+- `results/unified_noise_sweep.csv` when `--noise-sweep` is enabled
+- `results/unified_ablation_suite.csv` when `--run-ablation-suite` is enabled
 - `checkpoints/unified_model.pth`
+
+The comparison CSV reports mean and standard deviation for PSNR and SSIM, plus a Sobel-edge MSE metric for edge preservation. Lower edge MSE indicates closer agreement with the clean image's edge map.
+
+Optional experiment modes:
+
+- `--eval-only` evaluates an existing checkpoint without retraining.
+- `--noise-sweep` evaluates robustness across fixed corruption types and noise levels.
+- `--train-unet-baseline-epochs N` trains a plain U-Net denoising baseline and adds it to the comparison table.
+- `--run-ablation-suite` trains common variants: full model, no MiniUNet guidance, no residual refinement, and 4-neighbor diffusion.
+- `--config path/to/config.json` loads arguments from a JSON file using the same names as the command-line flags.
 
 ## Notes
 
