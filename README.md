@@ -48,7 +48,7 @@ The committed extended result uses:
 - held-out test evaluation against classical denoisers
 - PSNR and SSIM as image-quality metrics
 
-The latest extended comparison is saved in [`results_extended/unified_comparison_table.csv`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/results_extended/unified_comparison_table.csv).
+The latest extended comparison is saved in [`results_extended/unified_comparison_table.csv`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/results_extended/unified_comparison_table.csv).
 
 ## Results
 
@@ -77,15 +77,23 @@ This result supports the main project claim: a learned diffusion process can out
 
 ## Outputs And Figures
 
-The extended result artifacts are committed in [`results_extended/`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/results_extended):
+The extended result artifacts are committed in [`results_extended/`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/tree/extended/results_extended):
 
-- [`unified_comparison_table.csv`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/results_extended/unified_comparison_table.csv): quantitative comparison table
-- [`unified_loss_curves.png`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/results_extended/unified_loss_curves.png): training and validation curves
-- [`unified_qualitative_results.png`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/results_extended/unified_qualitative_results.png): qualitative denoising examples
+- [`unified_comparison_table.csv`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/results_extended/unified_comparison_table.csv): quantitative comparison table
+- [`unified_loss_curves.png`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/results_extended/unified_loss_curves.png): training and validation curves
+- [`unified_qualitative_results.png`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/results_extended/unified_qualitative_results.png): qualitative denoising examples
+
+### Training Curves
+
+![Training and validation loss and PSNR curves](https://raw.githubusercontent.com/tushar-nayak/neural-anisotropic-diffusion/extended/results_extended/unified_loss_curves.png)
+
+### Qualitative Denoising Examples
+
+![Qualitative MRI denoising examples](https://raw.githubusercontent.com/tushar-nayak/neural-anisotropic-diffusion/extended/results_extended/unified_qualitative_results.png)
 
 ## What the unified script does
 
-- Loads grayscale MRI slices from the local Br35H Kaggle download in [`brain_tumor_dataset/`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/brain_tumor_dataset).
+- Loads grayscale MRI slices from the local Br35H Kaggle download in `brain_tumor_dataset/`.
 - Splits the data into stratified train, validation, and test sets.
 - Synthesizes noise on the fly using Gaussian, Rician, speckle, or mixed corruption.
 - Trains a learnable anisotropic diffusion model with SSIM + L1 + gradient loss.
@@ -98,14 +106,14 @@ The extended result artifacts are committed in [`results_extended/`](/home/sofa/
   - qualitative examples
   - a comparison table against noisy input, Gaussian smoothing, median filtering, bilateral filtering, non-local means, wavelet denoising, classical Perona-Malik, curvature flow, and TV denoising
 
-The main entry point is [`main.py`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/main.py).
+The main entry point is [`main.py`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/main.py).
 
 ## Repository Layout
 
-- [`main.py`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/main.py): unified runnable version
-- [`Makefile`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/Makefile): `run` and `smoke` targets
-- [`requirements.txt`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/requirements.txt): dependency list
-- [`download_br35h_dataset.py`](/home/sofa/host_dir/nad/neural-anisotropic-diffusion/download_br35h_dataset.py): downloads the Br35H Kaggle dataset into the repo-local `brain_tumor_dataset/` path
+- [`main.py`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/main.py): unified runnable version
+- [`Makefile`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/Makefile): `run` and `smoke` targets
+- [`requirements.txt`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/requirements.txt): dependency list
+- [`download_br35h_dataset.py`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/download_br35h_dataset.py): downloads the Br35H Kaggle dataset into the repo-local `brain_tumor_dataset/` path
 - `brain_tumor_dataset/`: local Br35H MRI dataset, ignored by Git
 
 ## Requirements
