@@ -1,0 +1,11 @@
+Method,PSNR (dB),PSNR Std,SSIM,SSIM Std,Edge MSE,Edge MSE Std
+Noisy Input,14.971,2.09,0.433,0.151,0.288,0.122
+Gaussian Smoothing,15.954,1.81,0.461,0.099,0.356,0.048
+Median Filter,16.318,1.768,0.447,0.103,0.278,0.043
+Bilateral Filter,15.775,2.306,0.447,0.157,0.23,0.101
+Non-Local Means,16.863,2.248,0.494,0.129,0.23,0.068
+Wavelet Denoising,16.287,2.19,0.483,0.149,0.225,0.08
+Skimage TV,16.398,2.027,0.485,0.111,0.256,0.029
+Curvature Flow (16 iter),16.743,2.061,0.503,0.127,0.231,0.05
+Classical PM (16 iter),16.349,2.432,0.493,0.169,0.195,0.084
+Unified Neural PDE (Ours),22.482,0.005,0.637,0.049,0.102,0.002

@@ -3,9 +3,12 @@
 # 4/8-Neighbor PDE + Learnable Guidance + Optional Refinement
 # ============================================================
 import argparse
+import datetime
 import os
 import glob
 import json
+import platform
+import subprocess
 import warnings
 
 import matplotlib
@@ -663,6 +666,27 @@ def save_comparison_grid(examples, path, model_outputs=None, max_cols=6):
     plt.close()
 
 
+def save_metric_bar_plots(df, path):
+    plot_df = df.copy()
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+
+    axes[0].barh(plot_df["Method"], plot_df["PSNR (dB)"], color="#4277b6")
+    axes[0].set_title("PSNR by Method")
+    axes[0].set_xlabel("PSNR (dB)")
+    axes[0].invert_yaxis()
+    axes[0].grid(axis="x", alpha=0.25)
+
+    axes[1].barh(plot_df["Method"], plot_df["SSIM"], color="#4f9d69")
+    axes[1].set_title("SSIM by Method")
+    axes[1].set_xlabel("SSIM")
+    axes[1].invert_yaxis()
+    axes[1].grid(axis="x", alpha=0.25)
+
+    plt.tight_layout()
+    plt.savefig(path, dpi=150)
+    plt.close()
+
+
 def save_comparison_table(test_batches, model_psnrs, model_ssims, model_edge_mses, path, neighbor_mode, extra_rows=None):
     results_data, baseline_examples = run_classical_baselines(test_batches, neighbor_mode)
     results_data.extend(extra_rows or [])
@@ -808,7 +832,10 @@ def run_noise_sweep(model, dataset_path, args, device, path):
             _, _, _, _, _, test_loader = build_dataloaders(
                 dataset, batch_size=args.batch_size, seed=args.seed, num_workers=0
             )
-            psnrs, ssims, edge_mses, _ = evaluate_model(model, list(test_loader), device)
+            test_batches = list(test_loader)
+            if args.eval_limit is not None:
+                test_batches = test_batches[: args.eval_limit]
+            psnrs, ssims, edge_mses, _ = evaluate_model(model, test_batches, device)
             row = metric_summary("Unified Neural PDE (Ours)", psnrs, ssims, edge_mses)
             row["Noise Type"] = noise_type
             row["Sigma"] = sigma
@@ -878,6 +905,50 @@ def run_ablation_suite(train_loader, val_loader, test_batches, args, device, che
     return df
 
 
+def git_commit_hash():
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=BASE_DIR,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        return "unknown"
+
+
+def gpu_names():
+    if not torch.cuda.is_available():
+        return []
+    return [torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())]
+
+
+def save_run_metadata(args, path, train_count, val_count, test_count, checkpoint_path, comparison_path):
+    metadata = {
+        "timestamp_utc": datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat(),
+        "git_commit": git_commit_hash(),
+        "python": platform.python_version(),
+        "platform": platform.platform(),
+        "torch": torch.__version__,
+        "cuda_available": torch.cuda.is_available(),
+        "gpus": gpu_names(),
+        "dataset_path": DATASET_PATH,
+        "dataset_split": {
+            "train": train_count,
+            "validation": val_count,
+            "test": test_count,
+            "eval_limit": args.eval_limit,
+        },
+        "checkpoint_path": checkpoint_path,
+        "comparison_table": comparison_path,
+        "args": vars(args),
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=2, sort_keys=True)
+    print(f"Saved: {path}")
+    return metadata
+
+
 def apply_json_config(args):
     if not args.config:
         return args
@@ -909,6 +980,7 @@ def parse_args():
     parser.add_argument("--checkpoint-dir", type=str, default=CHECKPOINT_DIR)
     parser.add_argument("--checkpoint", type=str, default=None, help="Checkpoint path for eval-only or explicit loading.")
     parser.add_argument("--eval-only", action="store_true", help="Skip training and evaluate a saved checkpoint.")
+    parser.add_argument("--eval-limit", type=int, default=None, help="Evaluate only the first N held-out test examples.")
     parser.add_argument("--train-unet-baseline-epochs", type=int, default=0, help="Train and include a plain U-Net denoiser baseline.")
     parser.add_argument("--noise-sweep", action="store_true", help="Evaluate the saved/trained model across fixed noise levels.")
     parser.add_argument("--noise-sweep-types", type=str, default="gaussian,rician,speckle,mixed")
@@ -958,7 +1030,9 @@ def main():
     loss_plot_path = os.path.join(results_dir, "unified_loss_curves.png")
     qual_plot_path = os.path.join(results_dir, "unified_qualitative_results.png")
     comparison_grid_path = os.path.join(results_dir, "unified_full_comparison_grid.png")
+    metric_plot_path = os.path.join(results_dir, "unified_metric_bars.png")
     comparison_path = os.path.join(results_dir, "unified_comparison_table.csv")
+    metadata_path = os.path.join(results_dir, "run_metadata.json")
 
     if args.eval_only:
         if not os.path.exists(best_model_path):
@@ -982,6 +1056,9 @@ def main():
     model.eval()
 
     test_batches = list(test_loader)
+    if args.eval_limit is not None:
+        test_batches = test_batches[: args.eval_limit]
+        print(f"Evaluation limited to first {len(test_batches)} test examples.")
     model_psnrs, model_ssims, model_edge_mses, examples = evaluate_model(model, test_batches, device)
     save_qualitative_plot(examples, qual_plot_path)
     print(f"Saved: {qual_plot_path}")
@@ -1003,7 +1080,7 @@ def main():
         extra_rows.append(unet_row)
         extra_models = collect_model_examples(unet_model, test_batches, device, name="Plain U-Net Baseline")
 
-    _, baseline_examples = save_comparison_table(
+    comparison_df, baseline_examples = save_comparison_table(
         test_batches,
         model_psnrs,
         model_ssims,
@@ -1012,6 +1089,8 @@ def main():
         args.neighbor_mode,
         extra_rows=extra_rows,
     )
+    save_metric_bar_plots(comparison_df, metric_plot_path)
+    print(f"Saved: {metric_plot_path}")
 
     model_examples = collect_model_examples(model, test_batches, device)
     merged_model_examples = []
@@ -1022,6 +1101,15 @@ def main():
         merged_model_examples.append(merged)
     save_comparison_grid(baseline_examples, comparison_grid_path, merged_model_examples, max_cols=12)
     print(f"Saved: {comparison_grid_path}")
+    save_run_metadata(
+        args,
+        metadata_path,
+        len(train_set),
+        len(val_set),
+        len(test_set),
+        best_model_path,
+        comparison_path,
+    )
 
     if args.noise_sweep:
         sweep_path = os.path.join(results_dir, "unified_noise_sweep.csv")

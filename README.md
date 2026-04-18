@@ -2,6 +2,12 @@
 
 This repository contains a unified, working version of a learned Perona-Malik style image denoiser for brain MRI slices. The model unrolls a PDE-style diffusion process and predicts spatially varying conduction weights with a neural network so it can smooth noise while trying to preserve edges.
 
+**Best committed result:** `24.932 dB` PSNR / `0.722` SSIM on the held-out Br35H test split.
+
+**Gain over best classical baseline:** `+4.556 dB` PSNR / `+0.139` SSIM over Non-Local Means.
+
+Full result notes are in [`RESULTS.md`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/RESULTS.md).
+
 ## Project Summary
 
 Medical image denoising is not just a smoothing problem. In brain MRI, useful denoising should suppress noise while preserving anatomical boundaries, lesion margins, and tissue structure. Classical filters such as Gaussian smoothing can improve visual smoothness, but they often blur the same edges that matter downstream.
@@ -17,6 +23,7 @@ The current extended branch includes:
 - classical and neural comparison baselines
 - edge-preservation metrics
 - eval-only, noise-sweep, ablation, and config-driven experiment modes
+- reproducibility scripts for extended evaluation, noise sweeps, ablations, and U-Net baseline runs
 
 ## Method
 
@@ -82,10 +89,15 @@ The extended result artifacts are committed in [`results_extended/`](https://git
 - [`unified_comparison_table.csv`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/results_extended/unified_comparison_table.csv): quantitative comparison table
 - [`unified_loss_curves.png`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/results_extended/unified_loss_curves.png): training and validation curves
 - [`unified_qualitative_results.png`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/results_extended/unified_qualitative_results.png): qualitative denoising examples
+- [`unified_metric_bars.png`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/results_extended/unified_metric_bars.png): PSNR and SSIM bar chart
 
 ### Training Curves
 
 ![Training and validation loss and PSNR curves](https://raw.githubusercontent.com/tushar-nayak/neural-anisotropic-diffusion/extended/results_extended/unified_loss_curves.png)
+
+### Quantitative Comparison
+
+![PSNR and SSIM bar charts](https://raw.githubusercontent.com/tushar-nayak/neural-anisotropic-diffusion/extended/results_extended/unified_metric_bars.png)
 
 ### Qualitative Denoising Examples
 
@@ -114,6 +126,8 @@ The main entry point is [`main.py`](https://github.com/tushar-nayak/neural-aniso
 - [`Makefile`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/Makefile): `run` and `smoke` targets
 - [`requirements.txt`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/requirements.txt): dependency list
 - [`download_br35h_dataset.py`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/download_br35h_dataset.py): downloads the Br35H Kaggle dataset into the repo-local `brain_tumor_dataset/` path
+- [`RESULTS.md`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/RESULTS.md): experiment summary and interpretation
+- [`scripts/`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/tree/extended/scripts): reproducibility commands for common experiments
 - `brain_tumor_dataset/`: local Br35H MRI dataset, ignored by Git
 
 ## Requirements
@@ -160,6 +174,7 @@ python main.py --iterations 16 --lambda-param 0.05
 python main.py --epochs 300 --batch-size 8
 python main.py --epochs 300 --results-dir results_300epochs --checkpoint-dir checkpoints_300epochs
 python main.py --eval-only --checkpoint checkpoints_extended/unified_model.pth --results-dir results_eval
+python main.py --eval-only --checkpoint checkpoints_extended/unified_model.pth --eval-limit 50 --results-dir results_quick_eval
 python main.py --noise-sweep --noise-sweep-types gaussian,rician,speckle --noise-sweep-sigmas 0.05,0.10,0.15,0.20
 python main.py --train-unet-baseline-epochs 50
 python main.py --run-ablation-suite --ablation-epochs 20
@@ -180,6 +195,15 @@ Download or refresh the Br35H dataset locally:
 python download_br35h_dataset.py
 ```
 
+Reproduce common experiment variants:
+
+```bash
+scripts/run_extended_eval.sh
+scripts/run_noise_sweep.sh
+scripts/run_ablation_suite.sh
+scripts/run_unet_baseline.sh
+```
+
 Default behavior:
 
 - `neighbor-mode=8`
@@ -197,15 +221,18 @@ The unified script writes these files locally when you run it:
 - `results/unified_qualitative_results.png`
 - `results/unified_comparison_table.csv`
 - `results/unified_full_comparison_grid.png`
+- `results/unified_metric_bars.png`
 - `results/unified_noise_sweep.csv` when `--noise-sweep` is enabled
 - `results/unified_ablation_suite.csv` when `--run-ablation-suite` is enabled
+- `results/run_metadata.json`
 - `checkpoints/unified_model.pth`
 
-The comparison CSV reports mean and standard deviation for PSNR and SSIM, plus a Sobel-edge MSE metric for edge preservation. Lower edge MSE indicates closer agreement with the clean image's edge map.
+The comparison CSV reports mean and standard deviation for PSNR and SSIM, plus a Sobel-edge MSE metric for edge preservation. Lower edge MSE indicates closer agreement with the clean image's edge map. The metadata JSON records the command arguments, dataset split sizes, checkpoint path, git commit, Python/PyTorch versions, and GPU availability.
 
 Optional experiment modes:
 
 - `--eval-only` evaluates an existing checkpoint without retraining.
+- `--eval-limit N` evaluates only the first `N` held-out test examples for fast checks.
 - `--noise-sweep` evaluates robustness across fixed corruption types and noise levels.
 - `--train-unet-baseline-epochs N` trains a plain U-Net denoising baseline and adds it to the comparison table.
 - `--run-ablation-suite` trains common variants: full model, no MiniUNet guidance, no residual refinement, and 4-neighbor diffusion.
