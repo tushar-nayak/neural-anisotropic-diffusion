@@ -14,8 +14,9 @@
       --wash: #f4f7fb;
       --blue: #245da8;
       --green: #29735b;
-      --red: #ad3f3f;
       --gold: #916a1f;
+      --blue-soft: #eef4fc;
+      --green-soft: #edf8f3;
     }
 
     * {
@@ -115,6 +116,7 @@
       border-radius: 8px;
       padding: 18px;
       background: var(--paper);
+      min-height: 112px;
     }
 
     .metric b {
@@ -169,6 +171,10 @@
       background: var(--paper);
     }
 
+    .panel h3:first-child {
+      margin-top: 0;
+    }
+
     .panel img,
     .wide-img {
       width: 100%;
@@ -179,10 +185,31 @@
       background: var(--paper);
     }
 
+    .image-frame {
+      padding: 0;
+      overflow: hidden;
+    }
+
+    .image-frame .caption {
+      padding: 0 18px 18px;
+    }
+
+    .image-frame img {
+      border: 0;
+      border-radius: 0;
+    }
+
     .caption {
       margin: 10px 0 0;
       color: var(--muted);
       font-size: 0.92rem;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--paper);
     }
 
     table {
@@ -208,18 +235,19 @@
     th {
       color: var(--muted);
       font-weight: 700;
+      background: var(--wash);
     }
 
     tr.highlight td {
       font-weight: 700;
       color: var(--blue);
-      background: #eef4fc;
+      background: var(--blue-soft);
     }
 
-    tr.warning td {
+    tr.best td {
       font-weight: 700;
       color: var(--green);
-      background: #edf8f3;
+      background: var(--green-soft);
     }
 
     code {
@@ -266,11 +294,16 @@
 
       table {
         font-size: 0.85rem;
+        min-width: 620px;
       }
 
       th,
       td {
         padding: 8px 5px;
+      }
+
+      .button {
+        width: 100%;
       }
     }
   </style>
@@ -338,7 +371,7 @@
         <p class="section-intro">
           The learned PDE model substantially outperforms the classical denoising baselines. The plain U-Net baseline is included as a stronger neural comparison and achieves the best raw denoising metrics.
         </p>
-        <div class="panel">
+        <div class="table-wrap">
           <table>
             <thead>
               <tr>
@@ -359,7 +392,7 @@
               <tr><td>Curvature Flow</td><td>19.985</td><td>0.560</td><td>0.113</td></tr>
               <tr><td>Classical PM</td><td>19.635</td><td>0.539</td><td>0.106</td></tr>
               <tr class="highlight"><td>Unified Neural PDE</td><td>24.853</td><td>0.719</td><td>0.056</td></tr>
-              <tr class="warning"><td>Plain U-Net Baseline</td><td>25.875</td><td>0.759</td><td>0.053</td></tr>
+              <tr class="best"><td>Plain U-Net Baseline</td><td>25.875</td><td>0.759</td><td>0.053</td></tr>
             </tbody>
           </table>
         </div>
@@ -373,17 +406,17 @@
       <div class="wrap">
         <h2>Figures</h2>
         <div class="grid-2">
-          <div class="panel">
-            <img src="../results_final/unified_metric_bars.png" alt="PSNR and SSIM bar charts">
+          <div class="panel image-frame">
+            <img src="https://raw.githubusercontent.com/tushar-nayak/neural-anisotropic-diffusion/main/results_final/unified_metric_bars.png" alt="PSNR and SSIM bar charts">
             <p class="caption">The learned PDE model separates clearly from classical baselines, while the U-Net baseline is the strongest neural denoiser.</p>
           </div>
-          <div class="panel">
-            <img src="../results_final/unified_qualitative_results.png" alt="Qualitative MRI denoising examples">
+          <div class="panel image-frame">
+            <img src="https://raw.githubusercontent.com/tushar-nayak/neural-anisotropic-diffusion/main/results_final/unified_qualitative_results.png" alt="Qualitative MRI denoising examples">
             <p class="caption">Representative clean, noisy, and denoised MRI slices.</p>
           </div>
         </div>
         <h3>Full Method Grid</h3>
-        <img class="wide-img" src="../results_final/unified_full_comparison_grid.png" alt="Full denoising comparison grid">
+        <img class="wide-img" src="https://raw.githubusercontent.com/tushar-nayak/neural-anisotropic-diffusion/main/results_final/unified_full_comparison_grid.png" alt="Full denoising comparison grid">
       </div>
     </section>
 
@@ -393,7 +426,7 @@
         <p class="section-intro">
           Fixed-noise sweeps evaluate the trained PDE model across corruption types and strengths. Speckle noise is the easiest setting in this sweep; high Gaussian and high Rician corruption are the hardest.
         </p>
-        <div class="panel">
+        <div class="table-wrap">
           <table>
             <thead>
               <tr>
@@ -421,7 +454,7 @@
         <p class="section-intro">
           The ablation suite indicates that residual refinement is the most important optional component. MiniUNet guidance did not help in the short ablation run.
         </p>
-        <div class="panel">
+        <div class="table-wrap">
           <table>
             <thead>
               <tr>
