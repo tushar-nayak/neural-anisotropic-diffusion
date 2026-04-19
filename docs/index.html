@@ -310,6 +310,7 @@
       <div class="actions">
         <a class="button primary" href="https://github.com/tushar-nayak/neural-anisotropic-diffusion">View Repository</a>
         <a class="button" href="https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/main/RESULTS.md">Read Results</a>
+        <a class="button" href="https://tushar-nayak.github.io/projects/10_project/">Project Page</a>
       </div>
       <div class="metrics">
         <div class="metric">
@@ -395,6 +396,38 @@
 
     <section>
       <div class="wrap">
+        <h2>Interpreting The Results</h2>
+        <p class="section-intro">
+          The U-Net baseline performs best on raw denoising metrics, but that does not erase the value of the learned diffusion model. It clarifies what the project demonstrates.
+        </p>
+        <div class="grid-2">
+          <div class="panel">
+            <h3>What The Neural PDE Shows</h3>
+            <p>
+              The learned diffusion model beats every hand-designed denoising method in the benchmark by a large margin. Compared with Non-Local Means, it gains +4.460 dB PSNR and +0.134 SSIM while also reducing edge error.
+            </p>
+            <p>
+              That supports the core idea: a classical diffusion process becomes much stronger when the conduction behavior is learned from data.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>What The U-Net Shows</h3>
+            <p>
+              The plain U-Net reaches 25.875 dB PSNR and 0.759 SSIM, outperforming the neural PDE model's 24.853 dB and 0.719 SSIM. It is the best black-box neural denoiser in the final run.
+            </p>
+            <p>
+              The honest takeaway is that the PDE model is more structured and interpretable, while the U-Net has more flexible representational power for this supervised denoising split.
+            </p>
+          </div>
+        </div>
+        <p class="section-intro" style="margin-top: 28px;">
+          The final claim is not that learned diffusion beats every neural architecture. The stronger conclusion is that it closes much of the gap between classical PDE denoising and modern neural denoisers while preserving an iterative diffusion structure.
+        </p>
+      </div>
+    </section>
+
+    <section>
+      <div class="wrap">
         <h2>Figures</h2>
         <div class="grid-2">
           <div class="panel image-frame">
@@ -470,7 +503,7 @@
 
   <section class="footer">
     <div class="wrap">
-      Neural Anisotropic Diffusion for MRI Denoising. Source and artifacts are available on GitHub.
+      Neural Anisotropic Diffusion for MRI Denoising. Source and artifacts are available on GitHub. Personal write-up: <a href="https://tushar-nayak.github.io/projects/10_project/">Project Page</a>.
     </div>
   </section>
 </body>
