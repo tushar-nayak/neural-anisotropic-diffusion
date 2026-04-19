@@ -2,9 +2,11 @@
 
 This repository contains a unified, working version of a learned Perona-Malik style image denoiser for brain MRI slices. The model unrolls a PDE-style diffusion process and predicts spatially varying conduction weights with a neural network so it can smooth noise while trying to preserve edges.
 
-**Best committed result:** `24.932 dB` PSNR / `0.722` SSIM on the held-out Br35H test split.
+**Best final neural PDE result:** `24.853 dB` PSNR / `0.719` SSIM on the held-out Br35H test split.
 
-**Gain over best classical baseline:** `+4.556 dB` PSNR / `+0.139` SSIM over Non-Local Means.
+**Gain over best classical baseline:** `+4.460 dB` PSNR / `+0.134` SSIM over Non-Local Means.
+
+**Best overall final denoiser:** a plain U-Net baseline reached `25.875 dB` PSNR / `0.759` SSIM.
 
 Full result notes are in [`RESULTS.md`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/RESULTS.md).
 
@@ -55,53 +57,60 @@ The committed extended result uses:
 - held-out test evaluation against classical denoisers
 - PSNR and SSIM as image-quality metrics
 
-The latest extended comparison is saved in [`results_extended/unified_comparison_table.csv`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/results_extended/unified_comparison_table.csv).
+The final comparison is saved in [`results_final/unified_comparison_table.csv`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/results_final/unified_comparison_table.csv).
 
 ## Results
 
-The extended run produced the following held-out test results:
+The final held-out test evaluation produced:
 
-| Method | PSNR (dB) | SSIM |
-| --- | ---: | ---: |
-| Noisy Input | 17.727 | 0.426 |
-| Gaussian Smoothing | 18.968 | 0.549 |
-| Median Filter | 19.502 | 0.519 |
-| Bilateral Filter | 18.952 | 0.461 |
-| Non-Local Means | 20.376 | 0.583 |
-| Wavelet Denoising | 19.523 | 0.529 |
-| Skimage TV | 19.457 | 0.568 |
-| Curvature Flow (16 iter) | 19.957 | 0.557 |
-| Classical PM (16 iter) | 19.610 | 0.535 |
-| Unified Neural PDE (Ours) | 24.932 | 0.722 |
+| Method | PSNR (dB) | SSIM | Edge MSE |
+| --- | ---: | ---: | ---: |
+| Noisy Input | 17.711 | 0.425 | 0.194 |
+| Gaussian Smoothing | 19.011 | 0.552 | 0.185 |
+| Median Filter | 19.538 | 0.521 | 0.136 |
+| Bilateral Filter | 18.955 | 0.463 | 0.136 |
+| Non-Local Means | 20.393 | 0.585 | 0.087 |
+| Wavelet Denoising | 19.519 | 0.530 | 0.106 |
+| Skimage TV | 19.482 | 0.570 | 0.134 |
+| Curvature Flow (16 iter) | 19.985 | 0.560 | 0.113 |
+| Classical PM (16 iter) | 19.635 | 0.539 | 0.106 |
+| Unified Neural PDE (Ours) | 24.853 | 0.719 | 0.056 |
 
-The learned diffusion model is the strongest method in this comparison. Relative to the best classical baseline in this table, Non-Local Means, the unified neural PDE improves:
+The learned diffusion model is the strongest PDE-style method and substantially outperforms the classical baselines. Relative to the best classical baseline in this table, Non-Local Means, the unified neural PDE improves:
 
 | Comparison | PSNR Gain | SSIM Gain |
 | --- | ---: | ---: |
-| Ours vs Non-Local Means | +4.556 dB | +0.139 |
+| Ours vs Non-Local Means | +4.460 dB | +0.134 |
 
-This result supports the main project claim: a learned diffusion process can outperform standard hand-designed denoisers on this MRI denoising setup while retaining the interpretability of iterative diffusion.
+The final deep baseline comparison is also included. A plain U-Net denoiser trained on the same noisy/clean setup reached `25.875 dB` PSNR and `0.759` SSIM, outperforming the learned PDE model. The honest conclusion is that the learned diffusion approach clearly beats hand-designed denoisers, while a generic supervised U-Net remains the strongest neural baseline in the final run.
 
 ## Outputs And Figures
 
-The extended result artifacts are committed in [`results_extended/`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/tree/extended/results_extended):
+The final result artifacts are committed in [`results_final/`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/tree/extended/results_final):
 
-- [`unified_comparison_table.csv`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/results_extended/unified_comparison_table.csv): quantitative comparison table
-- [`unified_loss_curves.png`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/results_extended/unified_loss_curves.png): training and validation curves
-- [`unified_qualitative_results.png`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/results_extended/unified_qualitative_results.png): qualitative denoising examples
-- [`unified_metric_bars.png`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/results_extended/unified_metric_bars.png): PSNR and SSIM bar chart
+- [`unified_comparison_table.csv`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/results_final/unified_comparison_table.csv): quantitative comparison table
+- [`unified_qualitative_results.png`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/results_final/unified_qualitative_results.png): qualitative denoising examples
+- [`unified_full_comparison_grid.png`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/results_final/unified_full_comparison_grid.png): multi-method qualitative comparison
+- [`unified_metric_bars.png`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/results_final/unified_metric_bars.png): PSNR and SSIM bar chart
+- [`run_metadata.json`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/results_final/run_metadata.json): run metadata and reproducibility information
 
-### Training Curves
+Additional completed experiment folders:
 
-![Training and validation loss and PSNR curves](https://raw.githubusercontent.com/tushar-nayak/neural-anisotropic-diffusion/extended/results_extended/unified_loss_curves.png)
+- [`results_noise_sweep/`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/tree/extended/results_noise_sweep): fixed-noise robustness sweep
+- [`results_unet_baseline/`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/tree/extended/results_unet_baseline): plain U-Net baseline comparison
+- [`results_ablation/`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/tree/extended/results_ablation): architecture ablation suite
 
 ### Quantitative Comparison
 
-![PSNR and SSIM bar charts](https://raw.githubusercontent.com/tushar-nayak/neural-anisotropic-diffusion/extended/results_extended/unified_metric_bars.png)
+![PSNR and SSIM bar charts](https://raw.githubusercontent.com/tushar-nayak/neural-anisotropic-diffusion/extended/results_final/unified_metric_bars.png)
+
+### Full Comparison Grid
+
+![Full denoising comparison grid](https://raw.githubusercontent.com/tushar-nayak/neural-anisotropic-diffusion/extended/results_final/unified_full_comparison_grid.png)
 
 ### Qualitative Denoising Examples
 
-![Qualitative MRI denoising examples](https://raw.githubusercontent.com/tushar-nayak/neural-anisotropic-diffusion/extended/results_extended/unified_qualitative_results.png)
+![Qualitative MRI denoising examples](https://raw.githubusercontent.com/tushar-nayak/neural-anisotropic-diffusion/extended/results_final/unified_qualitative_results.png)
 
 ## What the unified script does
 
@@ -198,6 +207,7 @@ python download_br35h_dataset.py
 Reproduce common experiment variants:
 
 ```bash
+scripts/run_final_all.sh
 scripts/run_extended_eval.sh
 scripts/run_noise_sweep.sh
 scripts/run_ablation_suite.sh

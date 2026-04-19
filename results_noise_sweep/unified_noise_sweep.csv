@@ -1,0 +1,17 @@
+Method,PSNR (dB),PSNR Std,SSIM,SSIM Std,Edge MSE,Edge MSE Std,Noise Type,Sigma
+Unified Neural PDE (Ours),26.376,2.602,0.769,0.133,0.028,0.011,gaussian,0.05
+Unified Neural PDE (Ours),24.567,2.368,0.728,0.138,0.043,0.014,gaussian,0.1
+Unified Neural PDE (Ours),22.655,2.072,0.679,0.142,0.064,0.018,gaussian,0.15
+Unified Neural PDE (Ours),21.063,1.752,0.633,0.141,0.09,0.023,gaussian,0.2
+Unified Neural PDE (Ours),26.669,2.569,0.784,0.122,0.028,0.011,rician,0.05
+Unified Neural PDE (Ours),25.536,2.142,0.752,0.108,0.041,0.014,rician,0.1
+Unified Neural PDE (Ours),24.513,1.57,0.713,0.101,0.063,0.02,rician,0.15
+Unified Neural PDE (Ours),22.094,0.938,0.569,0.086,0.102,0.028,rician,0.2
+Unified Neural PDE (Ours),27.026,2.691,0.784,0.13,0.024,0.011,speckle,0.05
+Unified Neural PDE (Ours),26.627,2.568,0.773,0.13,0.028,0.012,speckle,0.1
+Unified Neural PDE (Ours),26.002,2.403,0.758,0.13,0.034,0.014,speckle,0.15
+Unified Neural PDE (Ours),25.19,2.229,0.741,0.131,0.041,0.016,speckle,0.2
+Unified Neural PDE (Ours),26.699,2.643,0.78,0.129,0.027,0.011,mixed,0.05
+Unified Neural PDE (Ours),25.6,2.547,0.754,0.129,0.037,0.015,mixed,0.1
+Unified Neural PDE (Ours),24.407,2.522,0.719,0.132,0.054,0.023,mixed,0.15
+Unified Neural PDE (Ours),22.765,2.518,0.648,0.144,0.078,0.036,mixed,0.2

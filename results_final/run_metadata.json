@@ -1,0 +1,48 @@
+{
+  "args": {
+    "ablation_epochs": 20,
+    "batch_size": 8,
+    "checkpoint": "checkpoints_extended/unified_model.pth",
+    "checkpoint_dir": "checkpoints_extended",
+    "config": null,
+    "epochs": 300,
+    "eval_limit": null,
+    "eval_only": true,
+    "grad_weight": 0.1,
+    "image_size": 128,
+    "iterations": null,
+    "lambda_param": null,
+    "neighbor_mode": 8,
+    "no_refinement": false,
+    "no_unet_guidance": false,
+    "noise_sweep": false,
+    "noise_sweep_sigmas": "0.05,0.10,0.15,0.20",
+    "noise_sweep_types": "gaussian,rician,speckle,mixed",
+    "noise_type": "rician",
+    "results_dir": "results_final",
+    "run_ablation_suite": false,
+    "seed": 42,
+    "sigma_max": 0.2,
+    "sigma_min": 0.05,
+    "train_unet_baseline_epochs": 0
+  },
+  "checkpoint_path": "/home/sofa/host_dir/nad/neural-anisotropic-diffusion/checkpoints_extended/unified_model.pth",
+  "comparison_table": "/home/sofa/host_dir/nad/neural-anisotropic-diffusion/results_final/unified_comparison_table.csv",
+  "cuda_available": true,
+  "dataset_path": "/home/sofa/host_dir/nad/neural-anisotropic-diffusion/brain_tumor_dataset",
+  "dataset_split": {
+    "eval_limit": null,
+    "test": 450,
+    "train": 2100,
+    "validation": 450
+  },
+  "git_commit": "294ff0d5cc9311bd927b5db0fd64d17433a136e0",
+  "gpus": [
+    "NVIDIA RTX A5000",
+    "NVIDIA RTX A5000"
+  ],
+  "platform": "Linux-6.17.0-14-generic-x86_64-with-glibc2.35",
+  "python": "3.13.9",
+  "timestamp_utc": "2026-04-18T23:15:17+00:00",
+  "torch": "2.6.0+cu124"
+}
