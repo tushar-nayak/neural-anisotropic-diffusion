@@ -1,0 +1,777 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Results Explorer | Neural Anisotropic Diffusion</title>
+  <meta name="description" content="Interactive results explorer for the neural anisotropic diffusion MRI denoising project.">
+  <style>
+    :root {
+      --ink: #181b22;
+      --muted: #636a75;
+      --line: #d8dee8;
+      --paper: #ffffff;
+      --wash: #f5f8fc;
+      --blue: #245da8;
+      --green: #29735b;
+      --blue-soft: #eef4fc;
+      --green-soft: #edf8f3;
+      --amber: #8d6518;
+      --orange-soft: #fff6e7;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: var(--paper);
+      line-height: 1.55;
+    }
+
+    a {
+      color: var(--blue);
+      text-decoration: none;
+    }
+    a:hover { text-decoration: underline; }
+
+    .wrap {
+      width: min(1180px, calc(100% - 32px));
+      margin: 0 auto;
+    }
+
+    header {
+      background: linear-gradient(180deg, var(--wash) 0%, #ffffff 100%);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .hero {
+      min-height: 86vh;
+      display: grid;
+      align-content: center;
+      gap: 24px;
+      padding: 56px 0 40px;
+    }
+
+    .eyebrow {
+      color: var(--green);
+      font-weight: 700;
+      text-transform: uppercase;
+      font-size: 0.82rem;
+      letter-spacing: 0;
+    }
+
+    h1 {
+      margin: 0;
+      max-width: 920px;
+      font-size: clamp(2.4rem, 6vw, 5.2rem);
+      line-height: 1.02;
+      letter-spacing: 0;
+    }
+
+    .lead {
+      margin: 0;
+      max-width: 840px;
+      color: var(--muted);
+      font-size: 1.16rem;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 42px;
+      padding: 10px 16px;
+      border: 1px solid var(--ink);
+      border-radius: 8px;
+      background: var(--paper);
+      color: var(--ink);
+      font-weight: 700;
+    }
+    .button.primary {
+      background: var(--ink);
+      color: var(--paper);
+    }
+
+    section {
+      padding: 72px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    h2 {
+      margin: 0 0 14px;
+      font-size: clamp(1.7rem, 3vw, 2.5rem);
+      line-height: 1.15;
+    }
+
+    h3 {
+      margin: 0 0 10px;
+      font-size: 1.15rem;
+    }
+
+    .section-intro {
+      max-width: 820px;
+      margin: 0 0 26px;
+      color: var(--muted);
+      font-size: 1.04rem;
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .metric {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--paper);
+      padding: 18px;
+      min-height: 108px;
+    }
+
+    .metric b {
+      display: block;
+      color: var(--blue);
+      font-size: 1.55rem;
+      line-height: 1.05;
+    }
+
+    .metric span {
+      display: block;
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 28px;
+      align-items: start;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--paper);
+      padding: 18px;
+    }
+
+    .panel h3:first-child,
+    .panel p:first-child {
+      margin-top: 0;
+    }
+
+    .panel img,
+    .wide-img {
+      width: 100%;
+      height: auto;
+      display: block;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+    }
+
+    .image-frame {
+      padding: 0;
+      overflow: hidden;
+    }
+
+    .image-frame img {
+      border: 0;
+      border-radius: 0;
+    }
+
+    .caption {
+      margin: 10px 0 0;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--paper);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--paper);
+      font-size: 0.94rem;
+    }
+
+    th,
+    td {
+      padding: 10px 8px;
+      border-bottom: 1px solid var(--line);
+      text-align: right;
+      vertical-align: top;
+    }
+
+    th:first-child,
+    td:first-child {
+      text-align: left;
+    }
+
+    th {
+      background: var(--wash);
+      color: var(--muted);
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .highlight td {
+      background: var(--blue-soft);
+      color: var(--blue);
+      font-weight: 700;
+    }
+
+    .best td {
+      background: var(--green-soft);
+      color: var(--green);
+      font-weight: 700;
+    }
+
+    .controls {
+      display: grid;
+      grid-template-columns: 1.25fr 0.75fr;
+      gap: 14px;
+      align-items: end;
+    }
+
+    .control-group {
+      display: grid;
+      gap: 8px;
+    }
+
+    .control-label {
+      color: var(--muted);
+      font-size: 0.9rem;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    .dataset-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .dataset-tab {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--paper);
+      color: var(--ink);
+      font-weight: 700;
+      padding: 10px 14px;
+      cursor: pointer;
+    }
+
+    .dataset-tab.active {
+      border-color: var(--ink);
+      background: var(--ink);
+      color: var(--paper);
+    }
+
+    select {
+      min-height: 42px;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--paper);
+      color: var(--ink);
+      font: inherit;
+    }
+
+    .chart-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--paper);
+      padding: 18px;
+    }
+
+    .chart-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 12px;
+      margin-bottom: 10px;
+      flex-wrap: wrap;
+    }
+
+    .chart-note {
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    .chart-wrap {
+      overflow-x: auto;
+    }
+
+    svg {
+      width: 100%;
+      min-width: 820px;
+      display: block;
+    }
+
+    .figure-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 18px;
+    }
+
+    .footer {
+      padding: 34px 0;
+      color: var(--muted);
+      border-bottom: 0;
+      font-size: 0.95rem;
+    }
+
+    @media (max-width: 900px) {
+      .metrics,
+      .grid-2,
+      .controls,
+      .figure-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .hero {
+        min-height: auto;
+        padding-top: 36px;
+      }
+
+      .button {
+        width: 100%;
+      }
+
+      table {
+        min-width: 620px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap hero">
+      <div class="eyebrow">Interactive Results</div>
+      <h1>Results Explorer</h1>
+      <p class="lead">
+        Switch between the final comparison, U-Net baseline, noise robustness sweep, and ablation suite. The view updates in place from the committed result data, so the page stays static and GitHub Pages friendly.
+      </p>
+      <div class="actions">
+        <a class="button primary" href="index.html">Home</a>
+        <a class="button" href="https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/main/RESULTS.md">Written Report</a>
+        <a class="button" href="https://tushar-nayak.github.io/projects/10_project/">Project Page</a>
+      </div>
+      <div class="metrics" id="summaryCards"></div>
+    </div>
+  </header>
+
+  <main>
+    <section>
+      <div class="wrap">
+        <h2>Interactive View</h2>
+        <p class="section-intro" id="datasetSummary"></p>
+        <div class="controls">
+          <div class="control-group">
+            <div class="control-label">Dataset</div>
+            <div class="dataset-tabs" id="datasetTabs"></div>
+          </div>
+          <div class="control-group">
+            <div class="control-label">Metric</div>
+            <select id="metricSelect"></select>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="wrap">
+        <h2>Chart</h2>
+        <p class="section-intro" id="chartSummary"></p>
+        <div class="chart-card">
+          <div class="chart-header">
+            <div>
+              <strong id="chartTitle">Metric chart</strong>
+              <div class="chart-note" id="chartSubtitle"></div>
+            </div>
+            <div class="chart-note">Bars are sorted by the selected metric.</div>
+          </div>
+          <div class="chart-wrap" id="chart"></div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="wrap">
+        <h2>Table</h2>
+        <div class="table-wrap">
+          <table id="resultsTable"></table>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="wrap">
+        <h2>Interpretation</h2>
+        <div class="grid-2">
+          <div class="panel">
+            <h3>What The Learned PDE Shows</h3>
+            <p>
+              The learned diffusion model consistently beats the classical baselines by a wide margin. It is the strongest PDE-style denoiser in the project and stays tied to an interpretable iterative process.
+            </p>
+            <p>
+              That makes it a good benchmark for structured denoising research even when a more flexible black-box model wins on raw metrics.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>What The U-Net Baseline Shows</h3>
+            <p>
+              The plain U-Net is the strongest overall denoiser in the final run. The page keeps that result visible so the comparison stays honest.
+            </p>
+            <p>
+              The project claim is therefore narrower and stronger: learned anisotropic diffusion narrows the gap to modern neural denoisers while preserving the structure of a classical PDE.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="wrap">
+        <h2>Figures</h2>
+        <div class="figure-grid">
+          <div class="panel image-frame">
+            <img src="https://raw.githubusercontent.com/tushar-nayak/neural-anisotropic-diffusion/main/results_final/unified_metric_bars.png" alt="PSNR and SSIM bar chart">
+            <p class="caption">Final metric summary.</p>
+          </div>
+          <div class="panel image-frame">
+            <img src="https://raw.githubusercontent.com/tushar-nayak/neural-anisotropic-diffusion/main/results_final/unified_full_comparison_grid.png" alt="Full comparison grid">
+            <p class="caption">Full method comparison grid.</p>
+          </div>
+          <div class="panel image-frame">
+            <img src="https://raw.githubusercontent.com/tushar-nayak/neural-anisotropic-diffusion/main/results_final/unified_qualitative_results.png" alt="Qualitative denoising examples">
+            <p class="caption">Representative denoising examples.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <section class="footer">
+    <div class="wrap">
+      Neural Anisotropic Diffusion for MRI Denoising. See the
+      <a href="index.html">home page</a>,
+      <a href="https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/main/RESULTS.md">written report</a>,
+      and <a href="https://tushar-nayak.github.io/projects/10_project/">project page</a>.
+    </div>
+  </section>
+
+  <script>
+    const datasets = {
+      final: {
+        title: 'Final Comparison',
+        summary: 'The final no-retrain checkpoint evaluation compares the learned PDE model against classical denoisers. The U-Net baseline remains the strongest overall neural denoiser.',
+        chartNote: 'Final evaluation on the held-out Br35H test split.',
+        source: 'results_final/unified_comparison_table.csv',
+        metricOptions: [
+          { key: 'psnr', label: 'PSNR (dB)' },
+          { key: 'ssim', label: 'SSIM' },
+          { key: 'edgeMSE', label: 'Edge MSE' }
+        ],
+        columns: [
+          { key: 'label', label: 'Method' },
+          { key: 'psnr', label: 'PSNR (dB)' },
+          { key: 'psnrStd', label: 'PSNR Std' },
+          { key: 'ssim', label: 'SSIM' },
+          { key: 'ssimStd', label: 'SSIM Std' },
+          { key: 'edgeMSE', label: 'Edge MSE' },
+          { key: 'edgeMSEStd', label: 'Edge MSE Std' }
+        ],
+        rows: [
+          { label: 'Noisy Input', psnr: 17.711, psnrStd: 3.37, ssim: 0.425, ssimStd: 0.141, edgeMSE: 0.194, edgeMSEStd: 0.116 },
+          { label: 'Gaussian Smoothing', psnr: 19.011, psnrStd: 2.855, ssim: 0.552, ssimStd: 0.136, edgeMSE: 0.185, edgeMSEStd: 0.093 },
+          { label: 'Median Filter', psnr: 19.538, psnrStd: 3.106, ssim: 0.521, ssimStd: 0.138, edgeMSE: 0.136, edgeMSEStd: 0.065 },
+          { label: 'Bilateral Filter', psnr: 18.955, psnrStd: 3.751, ssim: 0.463, ssimStd: 0.157, edgeMSE: 0.136, edgeMSEStd: 0.092 },
+          { label: 'Non-Local Means', psnr: 20.393, psnrStd: 3.714, ssim: 0.585, ssimStd: 0.152, edgeMSE: 0.087, edgeMSEStd: 0.060 },
+          { label: 'Wavelet Denoising', psnr: 19.519, psnrStd: 3.394, ssim: 0.530, ssimStd: 0.140, edgeMSE: 0.106, edgeMSEStd: 0.063 },
+          { label: 'Skimage TV', psnr: 19.482, psnrStd: 3.047, ssim: 0.570, ssimStd: 0.140, edgeMSE: 0.134, edgeMSEStd: 0.058 },
+          { label: 'Curvature Flow', psnr: 19.985, psnrStd: 3.325, ssim: 0.560, ssimStd: 0.140, edgeMSE: 0.113, edgeMSEStd: 0.056 },
+          { label: 'Classical PM', psnr: 19.635, psnrStd: 3.784, ssim: 0.539, ssimStd: 0.166, edgeMSE: 0.106, edgeMSEStd: 0.068 },
+          { label: 'Unified Neural PDE', psnr: 24.853, psnrStd: 2.120, ssim: 0.719, ssimStd: 0.111, edgeMSE: 0.056, edgeMSEStd: 0.027 },
+          { label: 'Plain U-Net Baseline', psnr: 25.875, psnrStd: 2.400, ssim: 0.759, ssimStd: 0.089, edgeMSE: 0.053, edgeMSEStd: 0.026 }
+        ],
+        defaultMetric: 'psnr'
+      },
+      unet: {
+        title: 'U-Net Baseline',
+        summary: 'The plain U-Net is the strongest overall denoiser in the final run. The page keeps it visible because it is the most direct neural comparison to the learned PDE model.',
+        chartNote: 'Plain U-Net baseline compared against the learned PDE and classical methods.',
+        source: 'results_unet_baseline/unified_comparison_table.csv',
+        metricOptions: [
+          { key: 'psnr', label: 'PSNR (dB)' },
+          { key: 'ssim', label: 'SSIM' },
+          { key: 'edgeMSE', label: 'Edge MSE' }
+        ],
+        columns: [
+          { key: 'label', label: 'Method' },
+          { key: 'psnr', label: 'PSNR (dB)' },
+          { key: 'psnrStd', label: 'PSNR Std' },
+          { key: 'ssim', label: 'SSIM' },
+          { key: 'ssimStd', label: 'SSIM Std' },
+          { key: 'edgeMSE', label: 'Edge MSE' },
+          { key: 'edgeMSEStd', label: 'Edge MSE Std' }
+        ],
+        rows: [
+          { label: 'Noisy Input', psnr: 17.711, psnrStd: 3.37, ssim: 0.425, ssimStd: 0.141, edgeMSE: 0.194, edgeMSEStd: 0.116 },
+          { label: 'Gaussian Smoothing', psnr: 19.011, psnrStd: 2.855, ssim: 0.552, ssimStd: 0.136, edgeMSE: 0.185, edgeMSEStd: 0.093 },
+          { label: 'Median Filter', psnr: 19.538, psnrStd: 3.106, ssim: 0.521, ssimStd: 0.138, edgeMSE: 0.136, edgeMSEStd: 0.065 },
+          { label: 'Bilateral Filter', psnr: 18.955, psnrStd: 3.751, ssim: 0.463, ssimStd: 0.157, edgeMSE: 0.136, edgeMSEStd: 0.092 },
+          { label: 'Non-Local Means', psnr: 20.393, psnrStd: 3.714, ssim: 0.585, ssimStd: 0.152, edgeMSE: 0.087, edgeMSEStd: 0.060 },
+          { label: 'Wavelet Denoising', psnr: 19.519, psnrStd: 3.394, ssim: 0.530, ssimStd: 0.140, edgeMSE: 0.106, edgeMSEStd: 0.063 },
+          { label: 'Skimage TV', psnr: 19.482, psnrStd: 3.047, ssim: 0.570, ssimStd: 0.140, edgeMSE: 0.134, edgeMSEStd: 0.058 },
+          { label: 'Curvature Flow', psnr: 19.985, psnrStd: 3.325, ssim: 0.560, ssimStd: 0.140, edgeMSE: 0.113, edgeMSEStd: 0.056 },
+          { label: 'Classical PM', psnr: 19.635, psnrStd: 3.784, ssim: 0.539, ssimStd: 0.166, edgeMSE: 0.106, edgeMSEStd: 0.068 },
+          { label: 'Plain U-Net Baseline', psnr: 25.875, psnrStd: 2.400, ssim: 0.759, ssimStd: 0.089, edgeMSE: 0.053, edgeMSEStd: 0.026 },
+          { label: 'Unified Neural PDE', psnr: 24.853, psnrStd: 2.120, ssim: 0.719, ssimStd: 0.111, edgeMSE: 0.056, edgeMSEStd: 0.027 }
+        ],
+        defaultMetric: 'psnr'
+      },
+      noise: {
+        title: 'Noise Robustness Sweep',
+        summary: 'The trained PDE model degrades smoothly as corruption increases. Speckle noise is the easiest case in this sweep, while high Gaussian and high Rician noise are the hardest.',
+        chartNote: 'Fixed-noise sweep across Gaussian, Rician, Speckle, and Mixed corruption.',
+        source: 'results_noise_sweep/unified_noise_sweep.csv',
+        metricOptions: [
+          { key: 'psnr', label: 'PSNR (dB)' },
+          { key: 'ssim', label: 'SSIM' },
+          { key: 'edgeMSE', label: 'Edge MSE' }
+        ],
+        columns: [
+          { key: 'label', label: 'Setting' },
+          { key: 'psnr', label: 'PSNR (dB)' },
+          { key: 'psnrStd', label: 'PSNR Std' },
+          { key: 'ssim', label: 'SSIM' },
+          { key: 'ssimStd', label: 'SSIM Std' },
+          { key: 'edgeMSE', label: 'Edge MSE' },
+          { key: 'edgeMSEStd', label: 'Edge MSE Std' }
+        ],
+        rows: [
+          { label: 'Gaussian / 0.05', noiseType: 'gaussian', sigma: 0.05, psnr: 26.376, psnrStd: 2.602, ssim: 0.769, ssimStd: 0.133, edgeMSE: 0.028, edgeMSEStd: 0.011 },
+          { label: 'Gaussian / 0.10', noiseType: 'gaussian', sigma: 0.10, psnr: 24.567, psnrStd: 2.368, ssim: 0.728, ssimStd: 0.138, edgeMSE: 0.043, edgeMSEStd: 0.014 },
+          { label: 'Gaussian / 0.15', noiseType: 'gaussian', sigma: 0.15, psnr: 22.655, psnrStd: 2.072, ssim: 0.679, ssimStd: 0.142, edgeMSE: 0.064, edgeMSEStd: 0.018 },
+          { label: 'Gaussian / 0.20', noiseType: 'gaussian', sigma: 0.20, psnr: 21.063, psnrStd: 1.752, ssim: 0.633, ssimStd: 0.141, edgeMSE: 0.090, edgeMSEStd: 0.023 },
+          { label: 'Rician / 0.05', noiseType: 'rician', sigma: 0.05, psnr: 26.669, psnrStd: 2.569, ssim: 0.784, ssimStd: 0.122, edgeMSE: 0.028, edgeMSEStd: 0.011 },
+          { label: 'Rician / 0.10', noiseType: 'rician', sigma: 0.10, psnr: 25.536, psnrStd: 2.142, ssim: 0.752, ssimStd: 0.108, edgeMSE: 0.041, edgeMSEStd: 0.014 },
+          { label: 'Rician / 0.15', noiseType: 'rician', sigma: 0.15, psnr: 24.513, psnrStd: 1.570, ssim: 0.713, ssimStd: 0.101, edgeMSE: 0.063, edgeMSEStd: 0.020 },
+          { label: 'Rician / 0.20', noiseType: 'rician', sigma: 0.20, psnr: 22.094, psnrStd: 0.938, ssim: 0.569, ssimStd: 0.086, edgeMSE: 0.102, edgeMSEStd: 0.028 },
+          { label: 'Speckle / 0.05', noiseType: 'speckle', sigma: 0.05, psnr: 27.026, psnrStd: 2.691, ssim: 0.784, ssimStd: 0.130, edgeMSE: 0.024, edgeMSEStd: 0.011 },
+          { label: 'Speckle / 0.10', noiseType: 'speckle', sigma: 0.10, psnr: 26.627, psnrStd: 2.568, ssim: 0.773, ssimStd: 0.130, edgeMSE: 0.028, edgeMSEStd: 0.012 },
+          { label: 'Speckle / 0.15', noiseType: 'speckle', sigma: 0.15, psnr: 26.002, psnrStd: 2.403, ssim: 0.758, ssimStd: 0.130, edgeMSE: 0.034, edgeMSEStd: 0.014 },
+          { label: 'Speckle / 0.20', noiseType: 'speckle', sigma: 0.20, psnr: 25.190, psnrStd: 2.229, ssim: 0.741, ssimStd: 0.131, edgeMSE: 0.041, edgeMSEStd: 0.016 },
+          { label: 'Mixed / 0.05', noiseType: 'mixed', sigma: 0.05, psnr: 26.699, psnrStd: 2.643, ssim: 0.780, ssimStd: 0.129, edgeMSE: 0.027, edgeMSEStd: 0.011 },
+          { label: 'Mixed / 0.10', noiseType: 'mixed', sigma: 0.10, psnr: 25.600, psnrStd: 2.547, ssim: 0.754, ssimStd: 0.129, edgeMSE: 0.037, edgeMSEStd: 0.015 },
+          { label: 'Mixed / 0.15', noiseType: 'mixed', sigma: 0.15, psnr: 24.407, psnrStd: 2.522, ssim: 0.719, ssimStd: 0.132, edgeMSE: 0.054, edgeMSEStd: 0.023 },
+          { label: 'Mixed / 0.20', noiseType: 'mixed', sigma: 0.20, psnr: 22.765, psnrStd: 2.518, ssim: 0.648, ssimStd: 0.144, edgeMSE: 0.078, edgeMSEStd: 0.036 }
+        ],
+        defaultMetric: 'psnr'
+      },
+      ablation: {
+        title: 'Ablation Suite',
+        summary: 'The ablation study suggests that residual refinement matters most, while MiniUNet guidance did not help in the short training run. The 8-neighbor PDE is slightly stronger than the 4-neighbor variant.',
+        chartNote: 'Model variants trained in the ablation suite.',
+        source: 'results_ablation/unified_ablation_suite.csv',
+        metricOptions: [
+          { key: 'psnr', label: 'PSNR (dB)' },
+          { key: 'ssim', label: 'SSIM' },
+          { key: 'edgeMSE', label: 'Edge MSE' },
+          { key: 'bestValLoss', label: 'Best Val Loss' }
+        ],
+        columns: [
+          { key: 'label', label: 'Variant' },
+          { key: 'psnr', label: 'PSNR (dB)' },
+          { key: 'ssim', label: 'SSIM' },
+          { key: 'edgeMSE', label: 'Edge MSE' },
+          { key: 'bestValLoss', label: 'Best Val Loss' },
+          { key: 'neighborMode', label: 'Neighbor Mode' },
+          { key: 'refinement', label: 'Refinement' },
+          { key: 'miniUNet', label: 'MiniUNet Guidance' }
+        ],
+        rows: [
+          { label: 'Full Model', psnr: 24.118, ssim: 0.691, edgeMSE: 0.061, bestValLoss: 0.354, neighborMode: 8, refinement: true, miniUNet: true },
+          { label: 'No MiniUNet Guidance', psnr: 24.249, ssim: 0.699, edgeMSE: 0.061, bestValLoss: 0.344, neighborMode: 8, refinement: true, miniUNet: false },
+          { label: 'No Residual Refinement', psnr: 22.798, ssim: 0.601, edgeMSE: 0.064, bestValLoss: 0.443, neighborMode: 8, refinement: false, miniUNet: true },
+          { label: '4-Neighbor Diffusion', psnr: 24.008, ssim: 0.686, edgeMSE: 0.062, bestValLoss: 0.356, neighborMode: 4, refinement: true, miniUNet: true }
+        ],
+        defaultMetric: 'psnr'
+      }
+    };
+
+    const state = { dataset: 'final', metric: datasets.final.defaultMetric };
+
+    const summaryCards = document.getElementById('summaryCards');
+    const datasetSummary = document.getElementById('datasetSummary');
+    const chartSummary = document.getElementById('chartSummary');
+    const chartTitle = document.getElementById('chartTitle');
+    const chartSubtitle = document.getElementById('chartSubtitle');
+    const chart = document.getElementById('chart');
+    const resultsTable = document.getElementById('resultsTable');
+    const datasetTabs = document.getElementById('datasetTabs');
+    const metricSelect = document.getElementById('metricSelect');
+
+    function fmt(value, digits = 3) {
+      return Number.isFinite(value) ? value.toFixed(digits) : String(value);
+    }
+
+    function metricLabel(key, dataset) {
+      return (dataset.metricOptions.find(option => option.key === key) || { label: key }).label;
+    }
+
+    function metricValue(row, key) {
+      return row[key];
+    }
+
+    function sortRows(rows, metricKey) {
+      return [...rows].sort((a, b) => metricValue(b, metricKey) - metricValue(a, metricKey));
+    }
+
+    function renderCards(dataset) {
+      const bestPsnr = [...dataset.rows].reduce((a, b) => a.psnr >= b.psnr ? a : b);
+      const bestSsim = [...dataset.rows].reduce((a, b) => a.ssim >= b.ssim ? a : b);
+      const bestEdge = [...dataset.rows].reduce((a, b) => a.edgeMSE <= b.edgeMSE ? a : b);
+
+      summaryCards.innerHTML = `
+        <div class="metric"><b>${fmt(bestPsnr.psnr)}</b><span>Best PSNR: ${bestPsnr.label}</span></div>
+        <div class="metric"><b>${fmt(bestSsim.ssim)}</b><span>Best SSIM: ${bestSsim.label}</span></div>
+        <div class="metric"><b>${fmt(bestEdge.edgeMSE)}</b><span>Lowest Edge MSE: ${bestEdge.label}</span></div>
+        <div class="metric"><b>${dataset.rows.length}</b><span>Rows in ${dataset.title}</span></div>
+      `;
+
+      datasetSummary.textContent = dataset.summary;
+      chartSummary.textContent = `${dataset.title} uses ${dataset.rows.length} recorded rows. The current chart is sorted by ${metricLabel(state.metric, dataset)}.`;
+      chartTitle.textContent = `${dataset.title} - ${metricLabel(state.metric, dataset)}`;
+      chartSubtitle.textContent = `${dataset.chartNote} Source data: ${dataset.source}.`;
+    }
+
+    function renderTabs() {
+      datasetTabs.innerHTML = '';
+      Object.entries(datasets).forEach(([key, dataset]) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = `dataset-tab${state.dataset === key ? ' active' : ''}`;
+        button.textContent = dataset.title;
+        button.addEventListener('click', () => {
+          state.dataset = key;
+          state.metric = datasets[key].defaultMetric;
+          metricSelect.value = state.metric;
+          render();
+        });
+        datasetTabs.appendChild(button);
+      });
+    }
+
+    function renderMetricSelect() {
+      const dataset = datasets[state.dataset];
+      metricSelect.innerHTML = dataset.metricOptions.map(option => `<option value="${option.key}">${option.label}</option>`).join('');
+      metricSelect.value = state.metric;
+    }
+
+    function renderChart() {
+      const dataset = datasets[state.dataset];
+      const rows = sortRows(dataset.rows, state.metric);
+      const maxValue = Math.max(...rows.map(row => metricValue(row, state.metric)));
+      const labelWidth = 300;
+      const barWidth = 480;
+      const rowHeight = 34;
+      const top = 28;
+      const height = top + rows.length * rowHeight + 20;
+      const ticks = [0, 0.25, 0.5, 0.75, 1];
+
+      const bars = rows.map((row, index) => {
+        const value = metricValue(row, state.metric);
+        const width = maxValue === 0 ? 0 : (value / maxValue) * barWidth;
+        const y = top + index * rowHeight;
+        const fill = row.label.includes('Plain U-Net Baseline')
+          ? 'var(--green)'
+          : row.label.includes('Unified Neural PDE')
+            ? 'var(--blue)'
+            : '#7d8794';
+        return `
+          <g>
+            <title>${row.label}: ${fmt(value)} (${metricLabel(state.metric, dataset)})</title>
+            <text x="10" y="${y + 16}" font-size="13" fill="var(--ink)">${row.label}</text>
+            <rect x="${labelWidth}" y="${y}" width="${width}" height="22" rx="6" fill="${fill}"></rect>
+            <text x="${labelWidth + width + 10}" y="${y + 16}" font-size="12" fill="var(--muted)">${fmt(value)}</text>
+          </g>
+        `;
+      }).join('');
+
+      const grid = ticks.map(t => {
+        const x = labelWidth + t * barWidth;
+        return `<line x1="${x}" y1="8" x2="${x}" y2="${height - 8}" stroke="var(--line)" stroke-dasharray="4 4"></line>`;
+      }).join('');
+
+      const tickLabels = ticks.map(t => {
+        const x = labelWidth + t * barWidth;
+        const val = (maxValue * t).toFixed(state.metric === 'bestValLoss' ? 3 : 2);
+        return `<text x="${x}" y="${height - 2}" font-size="11" text-anchor="middle" fill="var(--muted)">${val}</text>`;
+      }).join('');
+
+      chart.innerHTML = `
+        <svg viewBox="0 0 ${labelWidth + barWidth + 160} ${height}" role="img" aria-label="${dataset.title} chart">
+          ${grid}
+          ${bars}
+          ${tickLabels}
+        </svg>
+      `;
+    }
+
+    function renderTable() {
+      const dataset = datasets[state.dataset];
+      const headers = dataset.columns.map(col => `<th>${col.label}</th>`).join('');
+      const rows = dataset.rows.map(row => {
+        const cells = dataset.columns.map(col => {
+          const value = row[col.key];
+          if (typeof value === 'boolean') {
+            return `<td>${value ? 'Yes' : 'No'}</td>`;
+          }
+          if (typeof value === 'number') {
+            if (col.key === 'neighborMode') return `<td>${value}</td>`;
+            if (col.key === 'sigma') return `<td>${value.toFixed(2)}</td>`;
+            return `<td>${fmt(value)}</td>`;
+          }
+          return `<td>${value}</td>`;
+        }).join('');
+        const rowClass = row.label.includes('Plain U-Net Baseline') ? 'class="best"' : row.label.includes('Unified Neural PDE') ? 'class="highlight"' : '';
+        return `<tr ${rowClass}>${cells}</tr>`;
+      }).join('');
+
+      resultsTable.innerHTML = `<thead><tr>${headers}</tr></thead><tbody>${rows}</tbody>`;
+    }
+
+    function render() {
+      renderCards(datasets[state.dataset]);
+      renderTabs();
+      renderMetricSelect();
+      renderChart();
+      renderTable();
+    }
+
+    metricSelect.addEventListener('change', () => {
+      state.metric = metricSelect.value;
+      render();
+    });
+
+    render();
+  </script>
+</body>
+</html>
