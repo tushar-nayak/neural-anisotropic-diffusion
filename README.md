@@ -8,7 +8,7 @@ This repository contains a unified, working version of a learned Perona-Malik st
 
 **Best overall final denoiser:** a plain U-Net baseline reached `25.875 dB` PSNR / `0.759` SSIM.
 
-Full result notes are in [`RESULTS.md`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/RESULTS.md).
+Full result notes are in [`REPORT.md`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/REPORT.md).
 
 ## Project Summary
 
@@ -135,7 +135,7 @@ The main entry point is [`main.py`](https://github.com/tushar-nayak/neural-aniso
 - [`Makefile`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/Makefile): `run` and `smoke` targets
 - [`requirements.txt`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/requirements.txt): dependency list
 - [`download_br35h_dataset.py`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/download_br35h_dataset.py): downloads the Br35H Kaggle dataset into the repo-local `brain_tumor_dataset/` path
-- [`RESULTS.md`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/RESULTS.md): experiment summary and interpretation
+- [`REPORT.md`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/REPORT.md): experiment summary and interpretation
 - [`scripts/`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/tree/extended/scripts): reproducibility commands for common experiments
 - `brain_tumor_dataset/`: local Br35H MRI dataset, ignored by Git
 
