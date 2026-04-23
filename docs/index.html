@@ -18,10 +18,8 @@
       --green-soft: #edf8f3;
     }
 
-    * {
-      box-sizing: border-box;
-    }
-
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
     body {
       margin: 0;
       font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -239,6 +237,12 @@
       font-weight: 700;
     }
 
+    .best td {
+      background: var(--green-soft);
+      color: var(--green);
+      font-weight: 700;
+    }
+
     .footer {
       padding: 48px 0;
       color: var(--muted);
@@ -246,8 +250,92 @@
       border-top: 0;
     }
 
+    /* Explorer Specific Styles */
+    .controls {
+      display: grid;
+      grid-template-columns: 1.25fr 0.75fr;
+      gap: 14px;
+      align-items: end;
+      margin-bottom: 28px;
+    }
+
+    .control-group {
+      display: grid;
+      gap: 8px;
+    }
+
+    .control-label {
+      color: var(--muted);
+      font-size: 0.9rem;
+      font-weight: 700;
+    }
+
+    .dataset-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .dataset-tab {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--paper);
+      color: var(--ink);
+      font-weight: 700;
+      padding: 10px 14px;
+      cursor: pointer;
+    }
+
+    .dataset-tab.active {
+      border-color: var(--ink);
+      background: var(--ink);
+      color: var(--paper);
+    }
+
+    select {
+      min-height: 42px;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--paper);
+      color: var(--ink);
+      font: inherit;
+    }
+
+    .chart-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--paper);
+      padding: 18px;
+      margin-bottom: 28px;
+    }
+
+    .chart-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 12px;
+      margin-bottom: 10px;
+      flex-wrap: wrap;
+    }
+
+    .chart-note {
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    .chart-wrap {
+      overflow-x: auto;
+    }
+
+    svg {
+      width: 100%;
+      min-width: 600px;
+      display: block;
+    }
+
     @media (max-width: 800px) {
-      .metrics, .grid-2 {
+      .metrics, .grid-2, .controls {
         grid-template-columns: 1fr;
       }
       .hero {
@@ -266,11 +354,11 @@
       A learned variant of the Perona-Malik diffusion process that unrolls a PDE into a neural network to achieve edge-preserving smoothing in brain MRI scans.
     </p>
     <div class="actions">
-      <a class="button primary" href="results.html">Interactive Results</a>
+      <a class="button primary" href="#explorer">Interactive Results</a>
       <a class="button" href="https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/main/REPORT.md">View Report (Markdown)</a>
       <a class="button" href="https://github.com/tushar-nayak/neural-anisotropic-diffusion">Source Code</a>
     </div>
-    <div class="metrics">
+    <div class="metrics" id="summaryCardsHero">
       <div class="metric">
         <b>24.85 dB</b>
         <span>Neural PDE PSNR</span>
@@ -298,6 +386,40 @@
       <p class="section-intro">
         This project presents a novel, learned variant of the Perona-Malik anisotropic diffusion process. By unrolling the classical Partial Differential Equation (PDE) into a neural network architecture, we replace hand-designed conduction functions with a spatially-adaptive conduction network. Our model incorporates a MiniUNet guidance encoder and an 8-neighbor diffusion mode to effectively suppress noise while preserving critical anatomical edges. Evaluated on the Br35H dataset, our Unified Neural PDE model achieved a PSNR of 24.85 dB, outperforming the best classical baseline by +4.46 dB.
       </p>
+    </div>
+  </section>
+
+  <section id="explorer">
+    <div class="wrap">
+      <h2>Interactive Results Explorer</h2>
+      <p class="section-intro" id="datasetSummary">
+        Switch between the final comparison, U-Net baseline, noise robustness sweep, and ablation suite.
+      </p>
+      
+      <div class="controls">
+        <div class="control-group">
+          <div class="control-label">Experiment Suite</div>
+          <div class="dataset-tabs" id="datasetTabs"></div>
+        </div>
+        <div class="control-group">
+          <div class="control-label">Metric to Visualize</div>
+          <select id="metricSelect"></select>
+        </div>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-header">
+          <div>
+            <strong id="chartTitle">Metric chart</strong>
+            <div class="chart-note" id="chartSubtitle"></div>
+          </div>
+        </div>
+        <div class="chart-wrap" id="chart"></div>
+      </div>
+
+      <div class="table-wrap">
+        <table id="resultsTable"></table>
+      </div>
     </div>
   </section>
 
@@ -329,65 +451,6 @@
             The Gradient loss is critical for ensuring the denoiser doesn't wash out small lesion margins or cortical edges.
           </p>
         </div>
-      </div>
-    </div>
-  </section>
-
-  <section id="results">
-    <div class="wrap">
-      <h2>Quantitative Results</h2>
-      <p class="section-intro">
-        Comparison of the Unified Neural PDE against classical baselines and a deep U-Net benchmark on the held-out test split (Rician noise, σ=0.05-0.20).
-      </p>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Method</th>
-              <th>PSNR (dB)</th>
-              <th>SSIM</th>
-              <th>Edge MSE</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>Noisy Input</td>
-              <td>17.71</td>
-              <td>0.425</td>
-              <td>0.194</td>
-            </tr>
-            <tr>
-              <td>Gaussian Smoothing</td>
-              <td>19.01</td>
-              <td>0.552</td>
-              <td>0.185</td>
-            </tr>
-            <tr>
-              <td>Non-Local Means</td>
-              <td>20.39</td>
-              <td>0.585</td>
-              <td>0.087</td>
-            </tr>
-            <tr>
-              <td>Classical Perona-Malik</td>
-              <td>19.64</td>
-              <td>0.539</td>
-              <td>0.106</td>
-            </tr>
-            <tr class="highlight">
-              <td>Unified Neural PDE (Ours)</td>
-              <td>24.85</td>
-              <td>0.719</td>
-              <td>0.056</td>
-            </tr>
-            <tr>
-              <td>Plain U-Net Baseline</td>
-              <td>25.88</td>
-              <td>0.759</td>
-              <td>0.053</td>
-            </tr>
-          </tbody>
-        </table>
       </div>
     </div>
   </section>
@@ -431,6 +494,192 @@
     <p>&copy; 2026 Neural Anisotropic Diffusion Project. Submitted for Medical Image Analysis Course requirements.</p>
   </div>
 </footer>
+
+<script>
+    const datasets = {
+      final: {
+        title: 'Final Comparison',
+        summary: 'The final no-retrain checkpoint evaluation compares the learned PDE model against classical denoisers.',
+        chartNote: 'Final evaluation on the held-out Br35H test split.',
+        source: 'results_final/unified_comparison_table.csv',
+        metricOptions: [
+          { key: 'psnr', label: 'PSNR (dB)' },
+          { key: 'ssim', label: 'SSIM' },
+          { key: 'edgeMSE', label: 'Edge MSE' }
+        ],
+        columns: [
+          { key: 'label', label: 'Method' },
+          { key: 'psnr', label: 'PSNR (dB)' },
+          { key: 'ssim', label: 'SSIM' },
+          { key: 'edgeMSE', label: 'Edge MSE' }
+        ],
+        rows: [
+          { label: 'Noisy Input', psnr: 17.711, ssim: 0.425, edgeMSE: 0.194 },
+          { label: 'Gaussian Smoothing', psnr: 19.011, ssim: 0.552, edgeMSE: 0.185 },
+          { label: 'Median Filter', psnr: 19.538, ssim: 0.521, edgeMSE: 0.136 },
+          { label: 'Bilateral Filter', psnr: 18.955, ssim: 0.463, edgeMSE: 0.136 },
+          { label: 'Non-Local Means', psnr: 20.393, ssim: 0.585, edgeMSE: 0.087 },
+          { label: 'Wavelet Denoising', psnr: 19.519, ssim: 0.530, edgeMSE: 0.106 },
+          { label: 'Skimage TV', psnr: 19.482, ssim: 0.570, edgeMSE: 0.134 },
+          { label: 'Curvature Flow', psnr: 19.985, ssim: 0.560, edgeMSE: 0.113 },
+          { label: 'Classical PM', psnr: 19.635, ssim: 0.539, edgeMSE: 0.106 },
+          { label: 'Unified Neural PDE', psnr: 24.853, ssim: 0.719, edgeMSE: 0.056 },
+          { label: 'Plain U-Net Baseline', psnr: 25.875, ssim: 0.759, edgeMSE: 0.053 }
+        ],
+        defaultMetric: 'psnr'
+      },
+      noise: {
+        title: 'Noise Sweep',
+        summary: 'Robustness across Gaussian, Rician, and Speckle noise at varying sigmas.',
+        chartNote: 'Fixed-noise sweep performance.',
+        source: 'results_noise_sweep/unified_noise_sweep.csv',
+        metricOptions: [
+          { key: 'psnr', label: 'PSNR (dB)' },
+          { key: 'ssim', label: 'SSIM' }
+        ],
+        columns: [
+          { key: 'label', label: 'Setting' },
+          { key: 'psnr', label: 'PSNR (dB)' },
+          { key: 'ssim', label: 'SSIM' }
+        ],
+        rows: [
+          { label: 'Gaussian / 0.05', psnr: 26.376, ssim: 0.769 },
+          { label: 'Gaussian / 0.10', psnr: 24.567, ssim: 0.728 },
+          { label: 'Gaussian / 0.20', psnr: 21.063, ssim: 0.633 },
+          { label: 'Rician / 0.05', psnr: 26.669, ssim: 0.784 },
+          { label: 'Rician / 0.10', psnr: 25.536, ssim: 0.752 },
+          { label: 'Rician / 0.20', psnr: 22.094, ssim: 0.569 },
+          { label: 'Speckle / 0.05', psnr: 27.026, ssim: 0.784 },
+          { label: 'Speckle / 0.10', psnr: 26.627, ssim: 0.773 },
+          { label: 'Speckle / 0.20', psnr: 25.190, ssim: 0.741 }
+        ],
+        defaultMetric: 'psnr'
+      },
+      ablation: {
+        title: 'Ablation Study',
+        summary: 'Impact of architecture components (Refinement, Guidance, Neighbors).',
+        chartNote: 'Ablation suite results.',
+        source: 'results_ablation/unified_ablation_suite.csv',
+        metricOptions: [
+          { key: 'psnr', label: 'PSNR (dB)' },
+          { key: 'ssim', label: 'SSIM' },
+          { key: 'bestValLoss', label: 'Val Loss' }
+        ],
+        columns: [
+          { key: 'label', label: 'Variant' },
+          { key: 'psnr', label: 'PSNR (dB)' },
+          { key: 'ssim', label: 'SSIM' },
+          { key: 'bestValLoss', label: 'Loss' }
+        ],
+        rows: [
+          { label: 'Full Model', psnr: 24.118, ssim: 0.691, bestValLoss: 0.354 },
+          { label: 'No Guidance', psnr: 24.249, ssim: 0.699, bestValLoss: 0.344 },
+          { label: 'No Refinement', psnr: 22.798, ssim: 0.601, bestValLoss: 0.443 },
+          { label: '4-Neighbor', psnr: 24.008, ssim: 0.686, bestValLoss: 0.356 }
+        ],
+        defaultMetric: 'psnr'
+      }
+    };
+
+    const state = { dataset: 'final', metric: datasets.final.defaultMetric };
+
+    const datasetSummary = document.getElementById('datasetSummary');
+    const chartTitle = document.getElementById('chartTitle');
+    const chartSubtitle = document.getElementById('chartSubtitle');
+    const chart = document.getElementById('chart');
+    const resultsTable = document.getElementById('resultsTable');
+    const datasetTabs = document.getElementById('datasetTabs');
+    const metricSelect = document.getElementById('metricSelect');
+
+    function fmt(value, digits = 3) {
+      return Number.isFinite(value) ? value.toFixed(digits) : String(value);
+    }
+
+    function sortRows(rows, metricKey) {
+      return [...rows].sort((a, b) => {
+        if (metricKey === 'bestValLoss' || metricKey === 'edgeMSE') return a[metricKey] - b[metricKey];
+        return b[metricKey] - a[metricKey];
+      });
+    }
+
+    function renderTabs() {
+      datasetTabs.innerHTML = '';
+      Object.entries(datasets).forEach(([key, dataset]) => {
+        const button = document.createElement('button');
+        button.className = `dataset-tab${state.dataset === key ? ' active' : ''}`;
+        button.textContent = dataset.title;
+        button.onclick = () => {
+          state.dataset = key;
+          state.metric = datasets[key].defaultMetric;
+          render();
+        };
+        datasetTabs.appendChild(button);
+      });
+    }
+
+    function renderMetricSelect() {
+      const dataset = datasets[state.dataset];
+      metricSelect.innerHTML = dataset.metricOptions.map(o => `<option value="${o.key}">${o.label}</option>`).join('');
+      metricSelect.value = state.metric;
+    }
+
+    function renderChart() {
+      const dataset = datasets[state.dataset];
+      const rows = sortRows(dataset.rows, state.metric);
+      const values = rows.map(r => r[state.metric]);
+      const maxVal = Math.max(...values);
+      const minVal = Math.min(...values);
+      
+      const labelWidth = 180;
+      const barAreaWidth = 400;
+      const rowHeight = 32;
+      const height = rows.length * rowHeight + 40;
+
+      let bars = rows.map((r, i) => {
+        const val = r[state.metric];
+        const width = (val / maxVal) * barAreaWidth;
+        const color = r.label.includes('Unified Neural PDE') ? 'var(--blue)' : r.label.includes('Plain U-Net') ? 'var(--green)' : '#94a3b8';
+        return `
+          <g transform="translate(0, ${i * rowHeight + 10})">
+            <text x="${labelWidth - 10}" y="18" text-anchor="end" font-size="12" fill="var(--ink)">${r.label}</text>
+            <rect x="${labelWidth}" y="4" width="${width}" height="20" rx="4" fill="${color}"></rect>
+            <text x="${labelWidth + width + 8}" y="18" font-size="12" font-weight="700" fill="var(--muted)">${fmt(val)}</text>
+          </g>
+        `;
+      }).join('');
+
+      chart.innerHTML = `<svg viewBox="0 0 700 ${height}">${bars}</svg>`;
+    }
+
+    function renderTable() {
+      const dataset = datasets[state.dataset];
+      const headers = dataset.columns.map(c => `<th>${c.label}</th>`).join('');
+      const rows = dataset.rows.map(r => {
+        const cls = r.label.includes('Unified Neural PDE') ? 'class="highlight"' : '';
+        const cells = dataset.columns.map(c => `<td>${fmt(r[c.key])}</td>`).join('');
+        return `<tr ${cls}>${cells}</tr>`;
+      }).join('');
+      resultsTable.innerHTML = `<thead><tr>${headers}</tr></thead><tbody>${rows}</tbody>`;
+    }
+
+    function render() {
+      const d = datasets[state.dataset];
+      datasetSummary.textContent = d.summary;
+      chartTitle.textContent = d.title;
+      chartSubtitle.textContent = d.chartNote;
+      renderTabs();
+      renderMetricSelect();
+      renderChart();
+      renderTable();
+    }
+
+    metricSelect.onchange = (e) => {
+      state.metric = e.target.value;
+      renderChart();
+    };
+
+    render();
+</script>
 
 </body>
 </html>
