@@ -188,8 +188,24 @@ python main.py --noise-sweep --noise-sweep-types gaussian,rician,speckle --noise
 python main.py --train-unet-baseline-epochs 50
 python main.py --run-ablation-suite --ablation-epochs 20
 python main.py --config configs/example.json
+```bash
 python main.py --no-refinement
 python main.py --no-unet-guidance
+```
+
+### Running Inference
+
+You can run denoising on individual images using the `inference.py` script. It loads a trained checkpoint and saves a side-by-side comparison of the noisy input and the neural PDE output.
+
+```bash
+# Basic inference using the default extended checkpoint
+python inference.py --image path/to/your/mri_slice.jpg
+
+# Specify a custom checkpoint and output path
+python inference.py \
+  --image brain_tumor_dataset/no/no10.jpg \
+  --checkpoint checkpoints/unified_model.pth \
+  --output my_denoised_result.png
 ```
 
 For a fast sanity check:
