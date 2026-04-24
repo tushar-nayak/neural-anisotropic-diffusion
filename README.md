@@ -31,6 +31,10 @@ The current extended branch includes:
 
 The model starts from a noisy MRI slice and repeatedly applies a learned diffusion update. At each unrolled step, local image gradients are computed across either 4 or 8 neighboring directions. A small neural conduction network predicts how much diffusion should happen along each direction, using both local gradients and optional guidance features.
 
+### Architecture Diagram
+
+![Unified neural anisotropic diffusion architecture](presentation/unified_architecture_diagram.png)
+
 The training objective combines:
 
 - SSIM loss for structural similarity
