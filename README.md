@@ -20,12 +20,28 @@ The current extended branch includes:
 
 - a unified PyTorch training and evaluation script
 - 4-neighbor and 8-neighbor diffusion modes
+- optional multi-scale diffusion
 - optional MiniUNet guidance features
 - optional residual refinement
+- uncertainty-map inference via Monte Carlo dropout
 - classical and neural comparison baselines
 - edge-preservation metrics
+- self-supervised blind-spot training mode
+- optional downstream segmentation evaluation when masks are available
 - eval-only, noise-sweep, ablation, and config-driven experiment modes
 - reproducibility scripts for extended evaluation, noise sweeps, ablations, and U-Net baseline runs
+
+## New Research Modes
+
+The current `main.py` and Gradio demo support a second layer of experimentation on top of the original denoising pipeline:
+
+- `--use-multiscale` enables a coarse-to-fine diffusion update path.
+- `--dropout-p` activates stochastic dropout, which the demo uses for uncertainty maps.
+- `--self-supervised` switches training to blind-spot corruption instead of clean targets.
+- `--run-segmentation-eval` trains and evaluates a small downstream segmentation head when masks are available.
+- The Gradio demo visualizes the denoised output, step-wise diffusion trace, conduction heatmaps, and uncertainty maps.
+
+BR35H itself does not ship pixel-level masks, so downstream segmentation evaluation only runs if you provide a compatible mask directory for the same image set.
 
 ## Method
 
@@ -195,11 +211,15 @@ python main.py --run-ablation-suite --ablation-epochs 20
 python main.py --config configs/example.json
 python main.py --no-refinement
 python main.py --no-unet-guidance
+python main.py --use-multiscale
+python main.py --dropout-p 0.1
+python main.py --self-supervised --mask-ratio 0.1 --mask-block-size 5
+python main.py --run-segmentation-eval --segmentation-mask-dir path/to/masks
 ```
 
 ### Interactive Demo
 
-Launch the Gradio app to upload an MRI slice, run the learned PDE denoiser, and inspect the diffusion trace and conduction heatmaps:
+Launch the Gradio app to upload an MRI slice, run the learned PDE denoiser, and inspect the diffusion trace, conduction heatmaps, and uncertainty maps:
 
 ```bash
 make demo
@@ -231,6 +251,8 @@ For a fast sanity check:
 ```bash
 make smoke
 ```
+
+Note: BR35H itself does not include pixel-level segmentation masks, so the downstream segmentation evaluation mode only runs if you provide a compatible mask directory for the same image set.
 
 Download or refresh the Br35H dataset locally:
 

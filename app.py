@@ -55,6 +55,8 @@ def load_model_cached(
     lambda_param,
     use_refinement,
     use_unet_guidance,
+    use_multiscale,
+    dropout_p,
 ):
     device = torch.device(device_name)
     model = UnifiedNeuralPeronaMalik(
@@ -63,6 +65,8 @@ def load_model_cached(
         neighbor_mode=neighbor_mode,
         use_refinement=use_refinement,
         use_unet_guidance=use_unet_guidance,
+        use_multiscale=use_multiscale,
+        dropout_p=dropout_p,
     ).to(device)
 
     state_dict = torch.load(checkpoint_path, map_location=device)
@@ -141,6 +145,29 @@ def make_summary_figure(trace):
     return fig
 
 
+def make_uncertainty_figure(mean_output, std_output, conduction_mean=None, conduction_std=None):
+    fig, axes = plt.subplots(1, 3 if conduction_std is not None else 2, figsize=(15, 4))
+    axes = np.atleast_1d(axes)
+
+    axes[0].imshow(mean_output.squeeze().cpu().numpy(), cmap="gray", vmin=0, vmax=1)
+    axes[0].set_title("Mean output")
+    axes[0].axis("off")
+
+    im = axes[1].imshow(std_output.squeeze().cpu().numpy(), cmap="magma")
+    axes[1].set_title("Output uncertainty")
+    axes[1].axis("off")
+    fig.colorbar(im, ax=axes[1], fraction=0.046, pad=0.04)
+
+    if conduction_std is not None:
+        im2 = axes[2].imshow(conduction_std.squeeze().cpu().numpy(), cmap="magma", vmin=0)
+        axes[2].set_title("Conduction uncertainty")
+        axes[2].axis("off")
+        fig.colorbar(im2, ax=axes[2], fraction=0.046, pad=0.04)
+
+    plt.tight_layout()
+    return fig
+
+
 def run_demo(
     image,
     checkpoint_path,
@@ -149,8 +176,11 @@ def run_demo(
     lambda_param,
     use_refinement,
     use_unet_guidance,
+    use_multiscale,
+    dropout_p,
     image_size,
     trace_stride,
+    uncertainty_samples,
 ):
     if image is None:
         raise gr.Error("Upload an MRI slice first.")
@@ -169,6 +199,8 @@ def run_demo(
             float(lambda_param),
             bool(use_refinement),
             bool(use_unet_guidance),
+            bool(use_multiscale),
+            float(dropout_p),
         )
     except RuntimeError as exc:
         raise gr.Error(
@@ -183,24 +215,33 @@ def run_demo(
     with torch.no_grad():
         output_tensor, trace = model.forward_with_trace(input_tensor, capture_every=int(trace_stride))
         output_tensor = torch.clamp(output_tensor, 0.0, 1.0)
+        uncertainty = model.forward_uncertainty(input_tensor, samples=int(uncertainty_samples), capture_every=int(trace_stride))
 
     input_preview = tensor_to_pil(input_tensor, original_size)
     output_preview = tensor_to_pil(output_tensor, original_size)
     trace_fig = make_trace_figure(trace, max_frames=6)
     summary_fig = make_summary_figure(trace)
+    uncertainty_fig = make_uncertainty_figure(
+        uncertainty["mean_output"],
+        uncertainty["std_output"],
+        uncertainty["conduction_mean"],
+        uncertainty["conduction_std"],
+    )
 
     iter_captures = [c for c in trace["captures"] if c["conduction_map"] is not None]
     mean_conduction = np.mean([float(c["mean_conduction"].mean().item()) for c in iter_captures]) if iter_captures else 0.0
     mean_update = np.mean([float(c["mean_update"].mean().item()) for c in iter_captures]) if iter_captures else 0.0
+    output_uncertainty = float(uncertainty["std_output"].mean().item())
 
     stats = (
         f"Device: `{device}`\n\n"
         f"Checkpoint: `{resolved_checkpoint}`\n\n"
         f"Neighbor mode: `{neighbor_mode}` | Iterations: `{iterations}` | Lambda: `{lambda_param}`\n\n"
-        f"Mean conduction: `{mean_conduction:.4f}` | Mean update magnitude: `{mean_update:.4f}`"
+        f"Multi-scale: `{use_multiscale}` | Dropout: `{dropout_p}` | Uncertainty samples: `{uncertainty_samples}`\n\n"
+        f"Mean conduction: `{mean_conduction:.4f}` | Mean update magnitude: `{mean_update:.4f}` | Output uncertainty: `{output_uncertainty:.4f}`"
     )
 
-    return input_preview, output_preview, trace_fig, summary_fig, stats
+    return input_preview, output_preview, uncertainty_fig, trace_fig, summary_fig, stats
 
 
 def build_demo():
@@ -221,8 +262,11 @@ def build_demo():
                 neighbor_mode = gr.Dropdown([4, 8], value=8, label="Neighbor Mode")
                 iterations = gr.Slider(1, 32, value=16, step=1, label="Iterations")
                 lambda_param = gr.Slider(0.005, 0.125, value=0.05, step=0.005, label="Lambda")
+                use_multiscale = gr.Checkbox(value=False, label="Use Multi-Scale Diffusion")
+                dropout_p = gr.Slider(0.0, 0.5, value=0.1, step=0.05, label="Dropout for Uncertainty")
                 image_size = gr.Slider(64, 256, value=128, step=16, label="Model Input Size")
                 trace_stride = gr.Slider(1, 4, value=1, step=1, label="Trace Capture Stride")
+                uncertainty_samples = gr.Slider(2, 16, value=8, step=1, label="Uncertainty Samples")
                 use_refinement = gr.Checkbox(value=True, label="Use Residual Refinement")
                 use_unet_guidance = gr.Checkbox(value=True, label="Use MiniUNet Guidance")
                 run = gr.Button("Run Diffusion")
@@ -233,6 +277,7 @@ def build_demo():
                 stats = gr.Markdown()
 
         with gr.Row():
+            uncertainty_plot = gr.Plot(label="Uncertainty Map")
             trace_plot = gr.Plot(label="Diffusion Trace")
             summary_plot = gr.Plot(label="Conduction Summary")
 
@@ -246,10 +291,13 @@ def build_demo():
                 lambda_param,
                 use_refinement,
                 use_unet_guidance,
+                use_multiscale,
+                dropout_p,
                 image_size,
                 trace_stride,
+                uncertainty_samples,
             ],
-            outputs=[input_output, output, trace_plot, summary_plot, stats],
+            outputs=[input_output, output, uncertainty_plot, trace_plot, summary_plot, stats],
         )
 
     return demo

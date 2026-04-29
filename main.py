@@ -138,6 +138,9 @@ class UnifiedNeuralPeronaMalik(nn.Module):
         neighbor_mode=8,
         use_refinement=True,
         use_unet_guidance=True,
+        use_multiscale=False,
+        multiscale_blend=0.65,
+        dropout_p=0.0,
     ):
         super().__init__()
 
@@ -148,6 +151,10 @@ class UnifiedNeuralPeronaMalik(nn.Module):
         self.lambda_param = lambda_param
         self.neighbor_mode = neighbor_mode
         self.use_refinement = use_refinement
+        self.use_multiscale = use_multiscale
+        self.multiscale_blend = multiscale_blend
+        self.dropout_p = dropout_p
+        self.feature_dropout = nn.Dropout2d(dropout_p) if dropout_p > 0 else nn.Identity()
 
         if neighbor_mode == 4:
             assert lambda_param <= 0.25, "lambda_param > 0.25 violates 4-neighbor stability"
@@ -157,20 +164,11 @@ class UnifiedNeuralPeronaMalik(nn.Module):
         self.guidance_encoder = MiniUNet(1, guidance_channels) if use_unet_guidance else SimpleGuidanceEncoder(guidance_channels)
 
         in_ch = neighbor_mode + guidance_channels
-        self.conduction_net = nn.Sequential(
-            nn.Conv2d(in_ch, 32, kernel_size=3, padding=1),
-            nn.ReLU(inplace=False),
-            nn.Conv2d(32, 16, kernel_size=3, padding=1),
-            nn.ReLU(inplace=False),
-            nn.Conv2d(16, neighbor_mode, kernel_size=3, padding=1),
-            nn.Sigmoid(),
-        )
-
-        self.refinement_net = nn.Sequential(
-            nn.Conv2d(1, 16, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(16, 1, kernel_size=3, padding=1),
-        )
+        self.conduction_conv1 = nn.Conv2d(in_ch, 32, kernel_size=3, padding=1)
+        self.conduction_conv2 = nn.Conv2d(32, 16, kernel_size=3, padding=1)
+        self.conduction_conv3 = nn.Conv2d(16, neighbor_mode, kernel_size=3, padding=1)
+        self.refinement_conv1 = nn.Conv2d(1, 16, kernel_size=3, padding=1)
+        self.refinement_conv2 = nn.Conv2d(16, 1, kernel_size=3, padding=1)
 
     def _neighbor_gradients(self, x):
         x_pad = F.pad(x, (1, 1, 1, 1), mode="replicate")
@@ -190,75 +188,144 @@ class UnifiedNeuralPeronaMalik(nn.Module):
 
         return grads
 
-    def forward(self, x):
+    def _single_scale_update(self, x, guidance_features):
+        grads = self._neighbor_gradients(x)
+        combined = torch.cat(grads + [guidance_features], dim=1)
+        combined = self.feature_dropout(combined)
+        h = F.relu(self.conduction_conv1(combined), inplace=False)
+        h = self.feature_dropout(h)
+        h = F.relu(self.conduction_conv2(h), inplace=False)
+        h = self.feature_dropout(h)
+        coeffs = torch.sigmoid(self.conduction_conv3(h))
+        coeffs = torch.split(coeffs, 1, dim=1)
+        coeff_stack = torch.cat(coeffs, dim=1)
+
+        update = 0.0
+        for c, g in zip(coeffs, grads):
+            update = update + c * g
+
+        return update, coeff_stack
+
+    def _multi_scale_update(self, x, guidance_features):
+        fine_update, fine_coeffs = self._single_scale_update(x, guidance_features)
+
+        coarse_x = F.avg_pool2d(x, kernel_size=2, stride=2, ceil_mode=False)
+        coarse_guidance = F.adaptive_avg_pool2d(guidance_features, coarse_x.shape[-2:])
+        coarse_update, coarse_coeffs = self._single_scale_update(coarse_x, coarse_guidance)
+        coarse_update = F.interpolate(coarse_update, size=x.shape[-2:], mode="bilinear", align_corners=False)
+        coarse_coeffs = F.interpolate(coarse_coeffs, size=x.shape[-2:], mode="bilinear", align_corners=False)
+
+        update = self.multiscale_blend * fine_update + (1.0 - self.multiscale_blend) * coarse_update
+        return update, fine_coeffs, coarse_coeffs
+
+    def _diffusion_forward(self, x, capture=False, capture_every=1):
         x_smooth = F.avg_pool2d(x, kernel_size=3, stride=1, padding=1)
         guidance_features = self.guidance_encoder(x_smooth).detach()
 
-        for _ in range(self.iterations):
-            grads = self._neighbor_gradients(x)
-            combined = torch.cat(grads + [guidance_features], dim=1)
-            coeffs = self.conduction_net(combined)
-            coeffs = torch.split(coeffs, 1, dim=1)
-
-            update = 0.0
-            for c, g in zip(coeffs, grads):
-                update = update + c * g
-            x = x + self.lambda_param * update
-
-        if self.use_refinement:
-            x = x + self.refinement_net(x)
-
-        return x
-
-    def forward_with_trace(self, x, capture_every=1):
-        """Run the model while collecting intermediate diffusion states."""
-        if capture_every < 1:
-            raise ValueError("capture_every must be >= 1")
-
-        x_smooth = F.avg_pool2d(x, kernel_size=3, stride=1, padding=1)
-        guidance_features = self.guidance_encoder(x_smooth).detach()
-
-        trace = {"captures": []}
+        trace = {"captures": []} if capture else None
 
         for step in range(self.iterations):
-            grads = self._neighbor_gradients(x)
-            combined = torch.cat(grads + [guidance_features], dim=1)
-            coeffs = self.conduction_net(combined)
-            coeffs = torch.split(coeffs, 1, dim=1)
-            coeff_stack = torch.cat(coeffs, dim=1)
+            if self.use_multiscale:
+                update, fine_coeffs, coarse_coeffs = self._multi_scale_update(x, guidance_features)
+            else:
+                update, fine_coeffs = self._single_scale_update(x, guidance_features)
+                coarse_coeffs = None
 
-            update = 0.0
-            for c, g in zip(coeffs, grads):
-                update = update + c * g
             x = x + self.lambda_param * update
 
-            if step % capture_every == 0 or step == self.iterations - 1:
+            if capture and (step % capture_every == 0 or step == self.iterations - 1):
                 trace["captures"].append(
                     {
                         "step": step + 1,
                         "stage": f"iter_{step + 1}",
                         "image": x.detach().clone(),
-                        "conduction_map": coeff_stack.mean(dim=1, keepdim=True).detach().clone(),
-                        "mean_conduction": coeff_stack.mean(dim=(1, 2, 3)).detach().clone(),
+                        "conduction_map": fine_coeffs.mean(dim=1, keepdim=True).detach().clone(),
+                        "coarse_conduction_map": (
+                            coarse_coeffs.mean(dim=1, keepdim=True).detach().clone() if coarse_coeffs is not None else None
+                        ),
+                        "mean_conduction": fine_coeffs.mean(dim=(1, 2, 3)).detach().clone(),
                         "mean_update": update.abs().mean(dim=(1, 2, 3)).detach().clone(),
                     }
                 )
 
         if self.use_refinement:
-            x = x + self.refinement_net(x)
+            r = F.relu(self.refinement_conv1(x), inplace=True)
+            r = self.feature_dropout(r)
+            x = x + self.refinement_conv2(r)
 
-        trace["captures"].append(
-            {
-                "step": self.iterations,
-                "stage": "refined",
-                "image": x.detach().clone(),
-                "conduction_map": None,
-                "mean_conduction": None,
-                "mean_update": None,
-            }
-        )
-        trace["final"] = x.detach().clone()
-        return x, trace
+        if capture:
+            trace["captures"].append(
+                {
+                    "step": self.iterations,
+                    "stage": "refined",
+                    "image": x.detach().clone(),
+                    "conduction_map": None,
+                    "coarse_conduction_map": None,
+                    "mean_conduction": None,
+                    "mean_update": None,
+                }
+            )
+            trace["final"] = x.detach().clone()
+            return x, trace
+
+        return x
+
+    def forward(self, x):
+        return self._diffusion_forward(x, capture=False)
+
+    def forward_with_trace(self, x, capture_every=1):
+        """Run the model while collecting intermediate diffusion states."""
+        if capture_every < 1:
+            raise ValueError("capture_every must be >= 1")
+        return self._diffusion_forward(x, capture=True, capture_every=capture_every)
+
+    def forward_uncertainty(self, x, samples=8, capture_every=1):
+        """Monte-Carlo dropout uncertainty over multiple stochastic passes."""
+        if samples < 2:
+            raise ValueError("samples must be >= 2 for uncertainty estimation")
+
+        was_training = self.training
+        self.eval()
+        dropout_modules = []
+        for module in self.modules():
+            if isinstance(module, (nn.Dropout, nn.Dropout2d, nn.Dropout3d)):
+                dropout_modules.append(module)
+                module.train()
+
+        outputs = []
+        conduction_maps = []
+        try:
+            with torch.no_grad():
+                for _ in range(samples):
+                    out, trace = self.forward_with_trace(x, capture_every=capture_every)
+                    outputs.append(out.detach())
+                    captures = [c for c in trace["captures"] if c["conduction_map"] is not None]
+                    if captures:
+                        conduction_maps.append(captures[-1]["conduction_map"].detach())
+        finally:
+            for module in dropout_modules:
+                module.eval()
+            if was_training:
+                self.train()
+
+        output_stack = torch.stack(outputs, dim=0)
+        mean_output = output_stack.mean(dim=0)
+        std_output = output_stack.std(dim=0)
+
+        conduction_mean = None
+        conduction_std = None
+        if conduction_maps:
+            conduction_stack = torch.stack(conduction_maps, dim=0)
+            conduction_mean = conduction_stack.mean(dim=0)
+            conduction_std = conduction_stack.std(dim=0)
+
+        return {
+            "mean_output": mean_output,
+            "std_output": std_output,
+            "conduction_mean": conduction_mean,
+            "conduction_std": conduction_std,
+            "samples": output_stack,
+        }
 
 
 class UNetDenoiser(nn.Module):
@@ -335,6 +402,69 @@ def combined_loss(output, clean, l1_fn, grad_weight=0.1):
     return ssim_l + l1_l + grad_weight * grad_l
 
 
+def apply_blind_spot_mask(x, mask_ratio=0.1, block_size=5):
+    if mask_ratio <= 0:
+        return x, torch.zeros_like(x)
+
+    mask = (torch.rand_like(x) < mask_ratio).float()
+    if block_size > 1:
+        pad = block_size // 2
+        mask = F.max_pool2d(mask, kernel_size=block_size, stride=1, padding=pad)
+        mask = torch.clamp(mask, 0.0, 1.0)
+
+    fill = F.avg_pool2d(x, kernel_size=3, stride=1, padding=1)
+    masked_x = x * (1.0 - mask) + fill * mask
+    return masked_x, mask
+
+
+def blind_spot_loss(output, noisy, mask, grad_weight=0.05):
+    masked_l1 = torch.sum(torch.abs(output - noisy) * mask) / (mask.sum() + 1e-8)
+    context_l1 = F.l1_loss(output * (1.0 - mask), noisy * (1.0 - mask))
+    grad_l = gradient_loss(output, noisy)
+    return masked_l1 + 0.25 * context_l1 + grad_weight * grad_l
+
+
+class TinySegmentationNet(nn.Module):
+    def __init__(self, in_ch=1, base_ch=16):
+        super().__init__()
+        self.encoder = nn.Sequential(
+            nn.Conv2d(in_ch, base_ch, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(base_ch, base_ch, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
+            nn.Conv2d(base_ch, base_ch * 2, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(base_ch * 2, base_ch * 2, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+        )
+        self.decoder = nn.Sequential(
+            nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False),
+            nn.Conv2d(base_ch * 2, base_ch, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(base_ch, 1, kernel_size=1),
+        )
+
+    def forward(self, x):
+        return self.decoder(self.encoder(x))
+
+
+def dice_coeff(pred, target, eps=1e-8):
+    pred = (pred > 0.5).float()
+    target = (target > 0.5).float()
+    intersection = (pred * target).sum(dim=(1, 2, 3))
+    union = pred.sum(dim=(1, 2, 3)) + target.sum(dim=(1, 2, 3))
+    return ((2 * intersection + eps) / (union + eps)).mean().item()
+
+
+def iou_score(pred, target, eps=1e-8):
+    pred = (pred > 0.5).float()
+    target = (target > 0.5).float()
+    intersection = (pred * target).sum(dim=(1, 2, 3))
+    union = ((pred + target) > 0).float().sum(dim=(1, 2, 3))
+    return ((intersection + eps) / (union + eps)).mean().item()
+
+
 def classical_perona_malik(img, iterations=16, kappa=0.1, gamma=0.05):
     u = img.copy()
     for _ in range(iterations):
@@ -382,6 +512,31 @@ def estimate_noise_sigma(img):
     return max(float(mad / 0.6745), 1e-3)
 
 
+def apply_noise_corruption(clean_tensor, noise_type="rician", sigma_range=(0.05, 0.20)):
+    sigma = torch.empty(1).uniform_(*sigma_range).item()
+
+    if noise_type == "gaussian":
+        noisy = clean_tensor + torch.randn_like(clean_tensor) * sigma
+    elif noise_type == "speckle":
+        noisy = clean_tensor + clean_tensor * torch.randn_like(clean_tensor) * sigma
+    elif noise_type == "mixed":
+        choice = np.random.choice(["gaussian", "rician", "speckle"])
+        if choice == "gaussian":
+            noisy = clean_tensor + torch.randn_like(clean_tensor) * sigma
+        elif choice == "speckle":
+            noisy = clean_tensor + clean_tensor * torch.randn_like(clean_tensor) * sigma
+        else:
+            noise_real = torch.randn_like(clean_tensor) * sigma
+            noise_imag = torch.randn_like(clean_tensor) * sigma
+            noisy = torch.sqrt((clean_tensor + noise_real) ** 2 + noise_imag ** 2)
+    else:
+        noise_real = torch.randn_like(clean_tensor) * sigma
+        noise_imag = torch.randn_like(clean_tensor) * sigma
+        noisy = torch.sqrt((clean_tensor + noise_real) ** 2 + noise_imag ** 2)
+
+    return torch.clamp(noisy, 0.0, 1.0)
+
+
 class MRIDenoisingDataset(Dataset):
     def __init__(self, folder_path, image_size=128, noise_type="rician", sigma_range=(0.05, 0.20)):
         self.image_paths = []
@@ -409,33 +564,70 @@ class MRIDenoisingDataset(Dataset):
         return len(self.image_paths)
 
     def _apply_noise(self, clean_tensor):
-        sigma = torch.empty(1).uniform_(*self.sigma_range).item()
-
-        if self.noise_type == "gaussian":
-            noisy = clean_tensor + torch.randn_like(clean_tensor) * sigma
-        elif self.noise_type == "speckle":
-            noisy = clean_tensor + clean_tensor * torch.randn_like(clean_tensor) * sigma
-        elif self.noise_type == "mixed":
-            choice = np.random.choice(["gaussian", "rician", "speckle"])
-            if choice == "gaussian":
-                noisy = clean_tensor + torch.randn_like(clean_tensor) * sigma
-            elif choice == "speckle":
-                noisy = clean_tensor + clean_tensor * torch.randn_like(clean_tensor) * sigma
-            else:
-                noise_real = torch.randn_like(clean_tensor) * sigma
-                noise_imag = torch.randn_like(clean_tensor) * sigma
-                noisy = torch.sqrt((clean_tensor + noise_real) ** 2 + noise_imag ** 2)
-        else:
-            noise_real = torch.randn_like(clean_tensor) * sigma
-            noise_imag = torch.randn_like(clean_tensor) * sigma
-            noisy = torch.sqrt((clean_tensor + noise_real) ** 2 + noise_imag ** 2)
-
-        return torch.clamp(noisy, 0.0, 1.0)
+        return apply_noise_corruption(clean_tensor, self.noise_type, self.sigma_range)
 
     def __getitem__(self, idx):
         clean_tensor = self.transform(Image.open(self.image_paths[idx]).convert("L"))
         noisy_tensor = self._apply_noise(clean_tensor)
         return noisy_tensor, clean_tensor, self.labels[idx]
+
+
+class SegmentationPairDataset(Dataset):
+    def __init__(self, folder_path, mask_folder_path, image_size=128):
+        self.image_paths = []
+        self.mask_paths = []
+        self.labels = []
+
+        for label, subfolder in enumerate(["no", "yes"]):
+            paths = (
+                glob.glob(os.path.join(folder_path, subfolder, "*.jpg"))
+                + glob.glob(os.path.join(folder_path, subfolder, "*.jpeg"))
+                + glob.glob(os.path.join(folder_path, subfolder, "*.png"))
+            )
+            for img_path in paths:
+                mask_path = self._resolve_mask_path(img_path, mask_folder_path, subfolder)
+                if mask_path is not None and os.path.exists(mask_path):
+                    self.image_paths.append(img_path)
+                    self.mask_paths.append(mask_path)
+                    self.labels.append(label)
+
+        self.transform = transforms.Compose(
+            [
+                transforms.Resize((image_size, image_size)),
+                transforms.ToTensor(),
+            ]
+        )
+        self.mask_transform = transforms.Compose(
+            [
+                transforms.Resize((image_size, image_size), interpolation=transforms.InterpolationMode.NEAREST),
+                transforms.ToTensor(),
+            ]
+        )
+
+    @staticmethod
+    def _resolve_mask_path(image_path, mask_folder_path, subfolder):
+        base = os.path.splitext(os.path.basename(image_path))[0]
+        candidates = [
+            os.path.join(mask_folder_path, subfolder, f"{base}.png"),
+            os.path.join(mask_folder_path, subfolder, f"{base}.jpg"),
+            os.path.join(mask_folder_path, subfolder, f"{base}_mask.png"),
+            os.path.join(mask_folder_path, subfolder, f"{base}_mask.jpg"),
+            os.path.join(mask_folder_path, f"{base}.png"),
+            os.path.join(mask_folder_path, f"{base}_mask.png"),
+        ]
+        for candidate in candidates:
+            if os.path.exists(candidate):
+                return candidate
+        return None
+
+    def __len__(self):
+        return len(self.image_paths)
+
+    def __getitem__(self, idx):
+        image = self.transform(Image.open(self.image_paths[idx]).convert("L"))
+        mask = self.mask_transform(Image.open(self.mask_paths[idx]).convert("L"))
+        mask = (mask > 0.5).float()
+        return image, mask, self.labels[idx]
 
 
 def build_dataloaders(dataset, batch_size=8, seed=42, num_workers=0):
@@ -513,6 +705,73 @@ def evaluate_model(model, loader, device):
                 examples[lv].append((clean.cpu(), noisy.cpu(), out.cpu(), s, p))
 
     return psnrs, ssims, edge_mses, examples
+
+
+def evaluate_segmentation_model(model, loader, device):
+    dices = []
+    ious = []
+
+    model.eval()
+    with torch.no_grad():
+        for inputs, masks, _ in loader:
+            inputs = inputs.to(device)
+            masks = masks.to(device)
+            logits = model(inputs)
+            probs = torch.sigmoid(logits)
+            dices.append(dice_coeff(probs, masks))
+            ious.append(iou_score(probs, masks))
+
+    return {
+        "Dice": float(np.mean(dices)) if dices else float("nan"),
+        "IoU": float(np.mean(ious)) if ious else float("nan"),
+    }
+
+
+def train_segmentation_model(
+    model,
+    train_loader,
+    val_loader,
+    device,
+    epochs,
+    lr=1e-3,
+    noise_type="rician",
+    sigma_range=(0.05, 0.20),
+):
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    bce = nn.BCEWithLogitsLoss()
+    best_val = float("inf")
+    best_state = None
+
+    for _ in range(epochs):
+        model.train()
+        for inputs, masks, _ in train_loader:
+            inputs = inputs.to(device)
+            masks = masks.to(device)
+            noisy_inputs = apply_noise_corruption(inputs, noise_type, sigma_range)
+            optimizer.zero_grad()
+            logits = model(noisy_inputs)
+            loss = bce(logits, masks)
+            loss.backward()
+            optimizer.step()
+
+        model.eval()
+        val_loss = 0.0
+        with torch.no_grad():
+            for inputs, masks, _ in val_loader:
+                inputs = inputs.to(device)
+                masks = masks.to(device)
+                noisy_inputs = apply_noise_corruption(inputs, noise_type, sigma_range)
+                logits = model(noisy_inputs)
+                val_loss += bce(logits, masks).item()
+        val_loss /= max(len(val_loader), 1)
+        if val_loss < best_val:
+            best_val = val_loss
+            best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+
+    if best_state is not None:
+        model.load_state_dict(best_state)
+
+    return model, best_val
 
 
 def save_loss_plot(train_losses, val_losses, train_psnrs, val_psnrs, path):
@@ -759,7 +1018,19 @@ def save_comparison_table(test_batches, model_psnrs, model_ssims, model_edge_mse
     return df, baseline_examples
 
 
-def train_model(model, train_loader, val_loader, device, epochs, grad_weight, checkpoint_path, lr=1e-3):
+def train_model(
+    model,
+    train_loader,
+    val_loader,
+    device,
+    epochs,
+    grad_weight,
+    checkpoint_path,
+    lr=1e-3,
+    self_supervised=False,
+    mask_ratio=0.1,
+    mask_block_size=5,
+):
     if isinstance(model, UnifiedNeuralPeronaMalik):
         optimizer = torch.optim.Adam(
             [
@@ -790,8 +1061,13 @@ def train_model(model, train_loader, val_loader, device, epochs, grad_weight, ch
             clean = clean.to(device)
 
             optimizer.zero_grad()
-            output = torch.clamp(model(noisy), 0.0, 1.0)
-            loss = combined_loss(output, clean, l1_criterion, grad_weight=grad_weight)
+            if self_supervised:
+                masked_noisy, mask = apply_blind_spot_mask(noisy, mask_ratio=mask_ratio, block_size=mask_block_size)
+                output = torch.clamp(model(masked_noisy), 0.0, 1.0)
+                loss = blind_spot_loss(output, noisy, mask, grad_weight=grad_weight)
+            else:
+                output = torch.clamp(model(noisy), 0.0, 1.0)
+                loss = combined_loss(output, clean, l1_criterion, grad_weight=grad_weight)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
@@ -806,8 +1082,13 @@ def train_model(model, train_loader, val_loader, device, epochs, grad_weight, ch
             for noisy, clean, _ in val_loader:
                 noisy = noisy.to(device)
                 clean = clean.to(device)
-                output = torch.clamp(model(noisy), 0.0, 1.0)
-                epoch_val_loss += combined_loss(output, clean, l1_criterion, grad_weight=grad_weight).item()
+                if self_supervised:
+                    masked_noisy, mask = apply_blind_spot_mask(noisy, mask_ratio=mask_ratio, block_size=mask_block_size)
+                    output = torch.clamp(model(masked_noisy), 0.0, 1.0)
+                    epoch_val_loss += blind_spot_loss(output, noisy, mask, grad_weight=grad_weight).item()
+                else:
+                    output = torch.clamp(model(noisy), 0.0, 1.0)
+                    epoch_val_loss += combined_loss(output, clean, l1_criterion, grad_weight=grad_weight).item()
                 epoch_val_psnr += psnr_metric(output, clean).item()
 
         scheduler.step()
@@ -865,6 +1146,69 @@ def evaluate_neural_baseline(train_loader, val_loader, test_batches, device, epo
     return metric_summary("Plain U-Net Baseline", psnrs, ssims, edge_mses), baseline
 
 
+def run_downstream_segmentation_evaluation(args, device, denoisers):
+    if not args.segmentation_mask_dir:
+        print("Skipping downstream segmentation evaluation: no --segmentation-mask-dir provided.")
+        return None
+
+    mask_dir = resolve_repo_path(args.segmentation_mask_dir)
+    if not os.path.isdir(mask_dir):
+        print(f"Skipping downstream segmentation evaluation: mask directory not found at {mask_dir}")
+        return None
+
+    seg_dataset = SegmentationPairDataset(DATASET_PATH, mask_dir, image_size=args.image_size)
+    if len(seg_dataset) == 0:
+        print("Skipping downstream segmentation evaluation: no matched image/mask pairs found.")
+        return None
+
+    _, _, _, train_loader, val_loader, test_loader = build_dataloaders(
+        seg_dataset, batch_size=args.batch_size, seed=args.seed, num_workers=0
+    )
+
+    segmenter = TinySegmentationNet().to(device)
+    segmenter, best_val = train_segmentation_model(
+        segmenter,
+        train_loader,
+        val_loader,
+        device,
+        epochs=args.segmentation_epochs,
+        noise_type=args.noise_type,
+        sigma_range=(args.sigma_min, args.sigma_max),
+    )
+    print(f"Downstream segmenter best validation loss: {best_val:.4f}")
+
+    rows = []
+    candidate_models = [("Noisy Input", None)] + list(denoisers)
+    for method_name, denoiser in candidate_models:
+        dice_scores = []
+        iou_scores = []
+        with torch.no_grad():
+            for clean, mask, _ in test_loader:
+                clean = clean.to(device)
+                mask = mask.to(device)
+                noisy = apply_noise_corruption(clean, args.noise_type, (args.sigma_min, args.sigma_max))
+                candidate = noisy if denoiser is None else torch.clamp(denoiser(noisy), 0.0, 1.0)
+                probs = torch.sigmoid(segmenter(candidate))
+                dice_scores.append(dice_coeff(probs, mask))
+                iou_scores.append(iou_score(probs, mask))
+
+        rows.append(
+            {
+                "Method": method_name,
+                "Dice": float(np.mean(dice_scores)) if dice_scores else float("nan"),
+                "IoU": float(np.mean(iou_scores)) if iou_scores else float("nan"),
+                "Segmenter Val Loss": best_val,
+            }
+        )
+
+    df = pd.DataFrame(rows).round(3)
+    seg_path = os.path.join(resolve_repo_path(args.results_dir), "downstream_segmentation_comparison.csv")
+    df.to_csv(seg_path, index=False)
+    print(f"Saved: {seg_path}")
+    print(df.to_markdown(index=False))
+    return df
+
+
 def run_noise_sweep(model, dataset_path, args, device, path):
     rows = []
     sweep_types = [x.strip() for x in args.noise_sweep_types.split(",") if x.strip()]
@@ -897,7 +1241,14 @@ def run_noise_sweep(model, dataset_path, args, device, path):
     return df
 
 
-def make_unified_model(args, neighbor_mode=None, use_refinement=None, use_unet_guidance=None):
+def make_unified_model(
+    args,
+    neighbor_mode=None,
+    use_refinement=None,
+    use_unet_guidance=None,
+    use_multiscale=None,
+    dropout_p=None,
+):
     mode = args.neighbor_mode if neighbor_mode is None else neighbor_mode
     iterations = args.iterations if args.iterations is not None else (16 if mode == 8 else 10)
     lambda_param = args.lambda_param if args.lambda_param is not None else (0.05 if mode == 8 else 0.1)
@@ -907,6 +1258,8 @@ def make_unified_model(args, neighbor_mode=None, use_refinement=None, use_unet_g
         neighbor_mode=mode,
         use_refinement=not args.no_refinement if use_refinement is None else use_refinement,
         use_unet_guidance=not args.no_unet_guidance if use_unet_guidance is None else use_unet_guidance,
+        use_multiscale=args.use_multiscale if use_multiscale is None else use_multiscale,
+        dropout_p=args.dropout_p if dropout_p is None else dropout_p,
     )
 
 
@@ -1028,6 +1381,8 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--results-dir", type=str, default=RESULTS_DIR)
     parser.add_argument("--checkpoint-dir", type=str, default=CHECKPOINT_DIR)
+    parser.add_argument("--dropout-p", type=float, default=0.0)
+    parser.add_argument("--use-multiscale", action="store_true", help="Enable multi-scale diffusion updates.")
     parser.add_argument("--checkpoint", type=str, default=None, help="Checkpoint path for eval-only or explicit loading.")
     parser.add_argument("--eval-only", action="store_true", help="Skip training and evaluate a saved checkpoint.")
     parser.add_argument("--eval-limit", type=int, default=None, help="Evaluate only the first N held-out test examples.")
@@ -1039,6 +1394,12 @@ def parse_args():
     parser.add_argument("--ablation-epochs", type=int, default=20)
     parser.add_argument("--no-refinement", action="store_true")
     parser.add_argument("--no-unet-guidance", action="store_true")
+    parser.add_argument("--self-supervised", action="store_true", help="Train with blind-spot self-supervision instead of clean targets.")
+    parser.add_argument("--mask-ratio", type=float, default=0.1)
+    parser.add_argument("--mask-block-size", type=int, default=5)
+    parser.add_argument("--run-segmentation-eval", action="store_true", help="Run downstream segmentation evaluation if masks are available.")
+    parser.add_argument("--segmentation-mask-dir", type=str, default=None, help="Directory with segmentation masks matching the Br35H images.")
+    parser.add_argument("--segmentation-epochs", type=int, default=15)
     return apply_json_config(parser.parse_args())
 
 
@@ -1097,6 +1458,9 @@ def main():
             args.epochs,
             args.grad_weight,
             best_model_path,
+            self_supervised=args.self_supervised,
+            mask_ratio=args.mask_ratio,
+            mask_block_size=args.mask_block_size,
         )
         print(f"\nTraining complete. Best val loss: {best_val_loss:.4f}")
         save_loss_plot(train_losses, val_losses, train_psnrs, val_psnrs, loss_plot_path)
@@ -1115,6 +1479,7 @@ def main():
 
     extra_rows = []
     extra_models = []
+    unet_model = None
     if args.train_unet_baseline_epochs > 0:
         unet_checkpoint_path = os.path.join(checkpoint_dir, "unet_baseline.pth")
         print(f"\nTraining plain U-Net baseline for {args.train_unet_baseline_epochs} epochs...")
@@ -1160,6 +1525,12 @@ def main():
         best_model_path,
         comparison_path,
     )
+
+    if args.run_segmentation_eval:
+        denoisers = [("Unified Neural PDE (Ours)", model)]
+        if unet_model is not None:
+            denoisers.append(("Plain U-Net Baseline", unet_model))
+        run_downstream_segmentation_evaluation(args, device, denoisers)
 
     if args.noise_sweep:
         sweep_path = os.path.join(results_dir, "unified_noise_sweep.csv")
