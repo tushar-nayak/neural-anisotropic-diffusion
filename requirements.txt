@@ -1,4 +1,5 @@
 matplotlib
+gradio
 kagglehub
 numpy
 pandas

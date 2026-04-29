@@ -210,6 +210,56 @@ class UnifiedNeuralPeronaMalik(nn.Module):
 
         return x
 
+    def forward_with_trace(self, x, capture_every=1):
+        """Run the model while collecting intermediate diffusion states."""
+        if capture_every < 1:
+            raise ValueError("capture_every must be >= 1")
+
+        x_smooth = F.avg_pool2d(x, kernel_size=3, stride=1, padding=1)
+        guidance_features = self.guidance_encoder(x_smooth).detach()
+
+        trace = {"captures": []}
+
+        for step in range(self.iterations):
+            grads = self._neighbor_gradients(x)
+            combined = torch.cat(grads + [guidance_features], dim=1)
+            coeffs = self.conduction_net(combined)
+            coeffs = torch.split(coeffs, 1, dim=1)
+            coeff_stack = torch.cat(coeffs, dim=1)
+
+            update = 0.0
+            for c, g in zip(coeffs, grads):
+                update = update + c * g
+            x = x + self.lambda_param * update
+
+            if step % capture_every == 0 or step == self.iterations - 1:
+                trace["captures"].append(
+                    {
+                        "step": step + 1,
+                        "stage": f"iter_{step + 1}",
+                        "image": x.detach().clone(),
+                        "conduction_map": coeff_stack.mean(dim=1, keepdim=True).detach().clone(),
+                        "mean_conduction": coeff_stack.mean(dim=(1, 2, 3)).detach().clone(),
+                        "mean_update": update.abs().mean(dim=(1, 2, 3)).detach().clone(),
+                    }
+                )
+
+        if self.use_refinement:
+            x = x + self.refinement_net(x)
+
+        trace["captures"].append(
+            {
+                "step": self.iterations,
+                "stage": "refined",
+                "image": x.detach().clone(),
+                "conduction_map": None,
+                "mean_conduction": None,
+                "mean_update": None,
+            }
+        )
+        trace["final"] = x.detach().clone()
+        return x, trace
+
 
 class UNetDenoiser(nn.Module):
     """Plain neural denoiser baseline trained on the same noisy/clean pairs."""

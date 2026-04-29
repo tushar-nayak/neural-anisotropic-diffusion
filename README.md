@@ -136,7 +136,8 @@ The main entry point is [`main.py`](https://github.com/tushar-nayak/neural-aniso
 ## Repository Layout
 
 - [`main.py`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/main.py): unified runnable version
-- [`Makefile`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/Makefile): `run` and `smoke` targets
+- [`app.py`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/app.py): Gradio demo with diffusion tracing
+- [`Makefile`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/Makefile): `run`, `smoke`, and `demo` targets
 - [`requirements.txt`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/requirements.txt): dependency list
 - [`download_br35h_dataset.py`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/download_br35h_dataset.py): downloads the Br35H Kaggle dataset into the repo-local `brain_tumor_dataset/` path
 - [`REPORT.md`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/REPORT.md): experiment summary and interpretation
@@ -192,9 +193,22 @@ python main.py --noise-sweep --noise-sweep-types gaussian,rician,speckle --noise
 python main.py --train-unet-baseline-epochs 50
 python main.py --run-ablation-suite --ablation-epochs 20
 python main.py --config configs/example.json
-```bash
 python main.py --no-refinement
 python main.py --no-unet-guidance
+```
+
+### Interactive Demo
+
+Launch the Gradio app to upload an MRI slice, run the learned PDE denoiser, and inspect the diffusion trace and conduction heatmaps:
+
+```bash
+make demo
+```
+
+Or run it directly:
+
+```bash
+python app.py --server-name 127.0.0.1 --server-port 7860
 ```
 
 ### Running Inference
