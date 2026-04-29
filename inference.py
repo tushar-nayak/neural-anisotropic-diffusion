@@ -9,6 +9,25 @@ import matplotlib.pyplot as plt
 # Import the model architecture from main.py
 from main import UnifiedNeuralPeronaMalik, MiniUNet, SimpleGuidanceEncoder, get_device
 
+
+def _remap_legacy_state_dict(state_dict):
+    if not any(key.startswith("conduction_net.") for key in state_dict):
+        return state_dict
+
+    remapped = {}
+    for key, value in state_dict.items():
+        new_key = key
+        if key.startswith("conduction_net."):
+            new_key = key.replace("conduction_net.0", "conduction_conv1")
+            new_key = new_key.replace("conduction_net.2", "conduction_conv2")
+            new_key = new_key.replace("conduction_net.4", "conduction_conv3")
+        elif key.startswith("guidance_encoder."):
+            new_key = key.replace("guidance_encoder.0", "guidance_encoder.net.0")
+            new_key = new_key.replace("guidance_encoder.1", "guidance_encoder.net.1")
+            new_key = new_key.replace("guidance_encoder.3", "guidance_encoder.net.3")
+        remapped[new_key] = value
+    return remapped
+
 def load_model(checkpoint_path, device, neighbor_mode=8, use_refinement=True, use_unet_guidance=True):
     # Default iterations/lambda based on neighbor mode as seen in main.py
     iterations = 16 if neighbor_mode == 8 else 10
@@ -25,7 +44,9 @@ def load_model(checkpoint_path, device, neighbor_mode=8, use_refinement=True, us
     if not os.path.exists(checkpoint_path):
         raise FileNotFoundError(f"Checkpoint not found at: {checkpoint_path}")
         
-    model.load_state_dict(torch.load(checkpoint_path, map_location=device))
+    state_dict = torch.load(checkpoint_path, map_location=device)
+    state_dict = _remap_legacy_state_dict(state_dict)
+    model.load_state_dict(state_dict, strict=False)
     model.eval()
     return model
 
@@ -54,9 +75,9 @@ def run_inference(model, image_path, device, image_size=128):
 def main():
     parser = argparse.ArgumentParser(description="Inference script for Neural Anisotropic Diffusion")
     parser.add_argument("--image", type=str, required=True, help="Path to the input image")
-    parser.add_argument("--checkpoint", type=str, default="checkpoints_extended/unified_model.pth", help="Path to the model checkpoint")
+    parser.add_argument("--checkpoint", type=str, default="checkpoints/best_model.pth", help="Path to the model checkpoint")
     parser.add_argument("--output", type=str, default="inference_result.png", help="Path to save the result visualization")
-    parser.add_argument("--neighbor-mode", type=int, default=8, choices=[4, 8], help="Neighbor mode used during training")
+    parser.add_argument("--neighbor-mode", type=int, default=4, choices=[4, 8], help="Neighbor mode used during training")
     parser.add_argument("--no-refinement", action="store_true", help="Disable refinement stage")
     parser.add_argument("--no-unet-guidance", action="store_true", help="Disable MiniUNet guidance")
     parser.add_argument("--image-size", type=int, default=128, help="Internal resolution for the model")

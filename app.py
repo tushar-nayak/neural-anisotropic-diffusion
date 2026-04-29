@@ -21,7 +21,7 @@ except ImportError as exc:
 from main import UnifiedNeuralPeronaMalik, get_device, resolve_repo_path
 
 
-DEFAULT_CHECKPOINT = "checkpoints_extended/unified_model.pth"
+DEFAULT_CHECKPOINT = "checkpoints/best_model.pth"
 try:
     RESAMPLING_BICUBIC = Image.Resampling.BICUBIC
 except AttributeError:
@@ -70,7 +70,23 @@ def load_model_cached(
     ).to(device)
 
     state_dict = torch.load(checkpoint_path, map_location=device)
-    model.load_state_dict(state_dict)
+    if any(key.startswith("conduction_net.") for key in state_dict):
+        # Older checkpoints used the legacy module names from a previous model layout.
+        remapped = {}
+        for key, value in state_dict.items():
+            new_key = key
+            if key.startswith("conduction_net."):
+                new_key = key.replace("conduction_net.0", "conduction_conv1")
+                new_key = new_key.replace("conduction_net.2", "conduction_conv2")
+                new_key = new_key.replace("conduction_net.4", "conduction_conv3")
+            elif key.startswith("guidance_encoder."):
+                new_key = key.replace("guidance_encoder.0", "guidance_encoder.net.0")
+                new_key = new_key.replace("guidance_encoder.1", "guidance_encoder.net.1")
+                new_key = new_key.replace("guidance_encoder.3", "guidance_encoder.net.3")
+            remapped[new_key] = value
+        state_dict = remapped
+
+    model.load_state_dict(state_dict, strict=False)
     model.eval()
     return model
 
@@ -257,18 +273,18 @@ def build_demo():
                 checkpoint = gr.Textbox(
                     value=DEFAULT_CHECKPOINT,
                     label="Checkpoint Path",
-                    placeholder="checkpoints_extended/unified_model.pth",
+                    placeholder="checkpoints/best_model.pth",
                 )
-                neighbor_mode = gr.Dropdown([4, 8], value=8, label="Neighbor Mode")
-                iterations = gr.Slider(1, 32, value=16, step=1, label="Iterations")
-                lambda_param = gr.Slider(0.005, 0.125, value=0.05, step=0.005, label="Lambda")
+                neighbor_mode = gr.Dropdown([4, 8], value=4, label="Neighbor Mode")
+                iterations = gr.Slider(1, 32, value=10, step=1, label="Iterations")
+                lambda_param = gr.Slider(0.005, 0.125, value=0.1, step=0.005, label="Lambda")
                 use_multiscale = gr.Checkbox(value=False, label="Use Multi-Scale Diffusion")
                 dropout_p = gr.Slider(0.0, 0.5, value=0.1, step=0.05, label="Dropout for Uncertainty")
                 image_size = gr.Slider(64, 256, value=128, step=16, label="Model Input Size")
                 trace_stride = gr.Slider(1, 4, value=1, step=1, label="Trace Capture Stride")
                 uncertainty_samples = gr.Slider(2, 16, value=8, step=1, label="Uncertainty Samples")
-                use_refinement = gr.Checkbox(value=True, label="Use Residual Refinement")
-                use_unet_guidance = gr.Checkbox(value=True, label="Use MiniUNet Guidance")
+                use_refinement = gr.Checkbox(value=False, label="Use Residual Refinement")
+                use_unet_guidance = gr.Checkbox(value=False, label="Use MiniUNet Guidance")
                 run = gr.Button("Run Diffusion")
 
             with gr.Column(scale=1):
