@@ -1,5 +1,7 @@
 # Neural Anisotropic Diffusion
 
+Indepth-results: [https://tushar-nayak.github.io/neural-anisotropic-diffusion/](https://tushar-nayak.github.io/neural-anisotropic-diffusion/)
+
 This repository contains a unified, working version of a learned Perona-Malik style image denoiser for brain MRI slices. The model unrolls a PDE-style diffusion process and predicts spatially varying conduction weights with a neural network so it can smooth noise while trying to preserve edges.
 
 **Best final neural PDE result:** `24.853 dB` PSNR / `0.719` SSIM on the held-out Br35H test split.
@@ -9,6 +11,32 @@ This repository contains a unified, working version of a learned Perona-Malik st
 **Best overall final denoiser:** a plain U-Net baseline reached `25.875 dB` PSNR / `0.759` SSIM.
 
 Full result notes are in [`REPORT.md`](https://github.com/tushar-nayak/neural-anisotropic-diffusion/blob/extended/REPORT.md).
+
+## TA Quickstart
+
+If you are grading on an Apple Silicon Mac, the demo is meant to run locally in the `bme_ml` Conda environment. PyTorch will use Apple's MPS backend automatically when available.
+
+```bash
+conda activate bme_ml
+pip install -r requirements.txt
+python app.py
+```
+
+Then open the local Gradio URL printed in the terminal, usually:
+
+```bash
+http://127.0.0.1:7862/
+```
+
+In the web app:
+
+1. Keep the default checkpoint path: `checkpoints/best_model.pth`
+2. Leave the defaults as-is for this checkpoint: `4` neighbors, `10` iterations, `lambda=0.1`, refinement off, MiniUNet guidance off
+3. Upload a grayscale brain MRI slice and click `Run Diffusion`
+
+If `7862` is already in use on your machine, change the port to another free local port, for example `7863`.
+
+For reference, [Neural Anisotropic Diffusion Demo.pdf](./Neural%20Anisotropic%20Diffusion%20Demo.pdf) is included in the repository.
 
 ## Project Summary
 
@@ -228,7 +256,7 @@ make demo
 Or run it directly:
 
 ```bash
-python app.py --server-name 127.0.0.1 --server-port 7860
+python app.py --server-name 127.0.0.1 --server-port 7862
 ```
 
 ### Running Inference
@@ -306,7 +334,5 @@ Optional experiment modes:
 
 ## Notes
 
-- The dataset is treated as a denoising benchmark, not a classifier.
 - The `no` and `yes` folder labels are used for stratified splitting and for labeling qualitative examples.
 - The script is headless-safe and uses the Agg matplotlib backend, so it runs over SSH or in a non-GUI environment.
-- The repository is intentionally cleaned to keep only the unified source, docs, and reproducibility files.

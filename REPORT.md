@@ -22,6 +22,9 @@ We employ a composite loss function to balance pixel-level accuracy, structural 
 $$\mathcal{L} = \mathcal{L}_{SSIM} + \mathcal{L}_{L1} + 0.1 \cdot \mathcal{L}_{Gradient}$$
 The gradient loss specifically penalizes differences in image derivatives, forcing the model to respect the edge map of the ground truth.
 
+### 3.3 Uncertainty Estimation
+The interactive demo also supports a qualitative uncertainty view using Monte Carlo dropout. At inference time, the model is run multiple times with dropout enabled, and the outputs are aggregated into a mean prediction and a standard-deviation map. This highlights regions where the denoising result is more or less stable under stochastic forward passes. We treat this as an exploratory visualization tool rather than a core evaluation metric, since we do not report formal calibration or uncertainty-scoring experiments in this submission.
+
 ## 4. Experimental Setup
 *   **Dataset**: Br35H Brain Tumor MRI (3,000 images).
 *   **Data Split**: 2,100 Train / 450 Validation / 450 Test.
